@@ -86,7 +86,10 @@ def _public(job):
 
 PHASE_RE = re.compile(r"^PHASE::([a-z_]+)::(.*)$")
 CAPTURED_RE = re.compile(r"captured -> ")
-WARN_RE = re.compile(r"^\s*!!")
+# "!!" marks a warning, but log() stamps every line with "[HH:MM:SS] " first, so the
+# marker is never at the start. Anchoring on "^\s*!!" silently matched nothing and
+# every run reported zero warnings however many it had.
+WARN_RE = re.compile(r"^(?:\[[0-9:]+\]\s*)?\s*!!")
 
 
 def _collect_artifacts(job):
@@ -167,7 +170,11 @@ def _run(job, cmd, secrets=()):
                 if CAPTURED_RE.search(line):
                     job["screenshots"] += 1
                 if WARN_RE.match(line):
-                    job["warnings"].append(line.strip())
+                    # Store the bare message, not the raw line. The manifest records
+                    # the same warning without the "[HH:MM:SS]   !! " stamp, and the
+                    # merge in _collect_artifacts dedupes on exact text - keeping the
+                    # stamp here listed every warning twice.
+                    job["warnings"].append(WARN_RE.sub("", line).strip())
                 job["log"].append(line)
 
         code = proc.wait()

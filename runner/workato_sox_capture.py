@@ -447,6 +447,16 @@ class Capturer:
         self.manifest = []
         self.warnings = []
 
+    def warn(self, msg):
+        """Record a warning in one place, so it reaches BOTH the log and the manifest.
+
+        Warnings that only ever went to the log were invisible to anyone reading the
+        workbook, and warnings that only went to the manifest were invisible while a
+        run was still going. Everything that needs a human goes through here.
+        """
+        log(f"  !! {msg}")
+        self.warnings.append(msg)
+
     def goto(self, url, must_contain=None, retries=3):
         for attempt in range(1, retries + 1):
             self.page.goto(url, wait_until="domcontentloaded")
@@ -462,13 +472,12 @@ class Capturer:
         return False
 
     def shoot(self, tab, kind, ident, desc, url):
-        """Whole-Mac-screen capture. If the page is taller than the screen, scroll and
+        """Whole-screen capture. If the page is taller than the screen, scroll and
         capture additional parts (part 2, 3, ...) up to max_parts."""
         self.seq += 1
         if self.workspace and not in_workspace(self.page, self.workspace):
-            msg = f"!! '{self.workspace}' not visible on page for: {desc}  ({url}) - CHECK THIS SCREENSHOT"
-            log("  " + msg)
-            self.warnings.append(msg)
+            self.warn(f"'{self.workspace}' not visible on page for: {desc}  ({url}) "
+                      f"- CHECK THIS SCREENSHOT")
         self.page.bring_to_front()
         activate_app(self.app_name)
         time.sleep(1.0)
@@ -565,7 +574,8 @@ class Capturer:
         if fid:
             ok = self.goto(assets_url(fid), must_contain=f"fid={fid}")
             if not ok:
-                log(f"  !! could not stay on folder {fid}; assets screenshot may be wrong - check it")
+                self.warn(f"could not stay on folder {fid} ({name}); the assets screenshot "
+                          f"is of whatever Workato redirected to - check it")
             discovered = self.discover_recipes()
             if discovered:
                 # discovered order first, then any known ones not on the page
@@ -585,9 +595,18 @@ class Capturer:
                     recipes = d2
                     for k, v in known.items():
                         recipes.setdefault(k, v)
+                    discovered = d2
+                if len(discovered) < expected:
+                    # The reload did not recover it. Recorded as a warning rather than
+                    # left as one "!" line in the log: a population short of what the
+                    # scope says should be there is either a real change to write up
+                    # or a capture that missed something, and both need a person.
+                    self.warn(f"{name}: expected {expected} recipes, found "
+                              f"{len(discovered)} after a reload - population may have "
+                              f"changed, or the page did not load fully")
             self.shoot(tab, "assets", fid, f"{name} - Assets (filter: Recipes) - {len(recipes)} recipes", assets_url(fid))
         else:
-            log("  !! folder id unknown and could not be resolved; skipping assets screenshot")
+            self.warn(f"folder id for {name} could not be resolved; no assets screenshot taken")
 
         for rid, rname in recipes.items():
             label = rname or known.get(rid) or f"recipe {rid}"

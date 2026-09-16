@@ -58,24 +58,31 @@ population - it would look fine and be wrong.
 
 ### Warnings in the finished run
 
-```
-!! 'Production' not visible on page for: <page> - CHECK THIS SCREENSHOT
-```
-
-The capture took the shot but could not confirm the workspace on that page. Open
-that screenshot in the workbook and confirm it by eye before signing off. These are
-listed in the panel and in `manifest.json`.
-
-### A folder captured fewer recipes than expected
+Every warning is listed on the finished panel and in `manifest.json`. None of them
+stop a run - they mark evidence a person has to look at before signing off.
 
 ```
-! expected 8 recipes, page shows 6 - reloading once
+'Production' not visible on page for: <page> - CHECK THIS SCREENSHOT
 ```
+The shot was taken but the workspace could not be confirmed on that page. Open it in
+the workbook and check it by eye.
 
-It reloads and re-counts. If the second count is still short, either the page was
-slow (raise `CAPTURE_SETTLE`) or the population genuinely changed - in which case
-the `expected` count and `known` ids in `SECTIONS` need updating, and the change
-itself is worth noting in the workpaper.
+```
+could not stay on folder 27517768 (CPQ > Customer); the assets screenshot is of
+whatever Workato redirected to - check it
+```
+The folder id does not resolve for the signed-in account, so Workato bounced to
+somewhere else and the screenshot is of that instead. Usually the wrong workspace:
+folder ids are per-workspace, so ids recorded against Production will not resolve in
+another one. Either select the workspace those folders live in, or update `fid` in
+`SECTIONS`.
+
+```
+CPQ > Customer: expected 2 recipes, found 0 after a reload
+```
+The folder held fewer recipes than the scope says it should, and a reload did not
+recover it. Either the population genuinely changed - which is a change to write up -
+or the page never loaded fully. Raise `CAPTURE_SETTLE` and re-run to tell them apart.
 
 ### "A capture is already running"
 
