@@ -67,6 +67,8 @@ def _public(job):
         "controlId": job["controlId"],
         "period": job["period"],
         "month": job["month"],
+        "workspace": job["workspace"],
+        "project": job["project"],
         "status": job["status"],
         "phase": job["phase"],
         "phaseDetail": job["phaseDetail"],
@@ -202,6 +204,47 @@ def capabilities():
     })
 
 
+def _projects():
+    """Projects the capture script knows about - one per workbook tab."""
+    import workato_sox_capture
+
+    return workato_sox_capture.project_names()
+
+
+def _workspaces(env_key="workato"):
+    """Workspaces offered for an environment.
+
+    From `workspaces:` in the config when it is listed, otherwise just the single
+    `workspace:` value. Never invented: a workspace name that does not exist would
+    fail the capture's own check after a sign-in, several minutes in.
+    """
+    try:
+        cfg = environments.find(env_key) or {}
+    except environments.ConfigError:
+        cfg = {}
+    listed = cfg.get("workspaces")
+    if isinstance(listed, list) and listed:
+        names = [str(w).strip() for w in listed if str(w).strip()]
+    else:
+        names = []
+    default = str(cfg.get("workspace", "") or os.environ.get("CAPTURE_WORKSPACE", "Production"))
+    if default and default not in names:
+        names.insert(0, default)
+    return names, default
+
+
+@app.get("/api/scope")
+def scope():
+    """What the Prepare selectors offer: which workspace, and which projects."""
+    env_key = request.args.get("system", "workato").lower()
+    names, default = _workspaces(env_key)
+    return jsonify({
+        "workspaces": names,
+        "defaultWorkspace": default,
+        "projects": _projects(),
+    })
+
+
 @app.get("/api/environments")
 def list_environments():
     """Configured environments, as the page may see them.
@@ -228,6 +271,23 @@ def prepare():
     control_id = str(body.get("controlId", "")).strip()
     period = str(body.get("period", "")).strip()
     month = str(body.get("month", "")).strip() or datetime.now().strftime("%B %Y")
+    workspace = str(body.get("workspace", "")).strip()
+    project = str(body.get("project", "")).strip() or "all"
+
+    # Reject an unknown project here rather than let the capture sign in first and
+    # fail afterwards - and so a typo can never widen the scope by falling back to
+    # capturing everything.
+    known = {p.lower() for p in _projects()}
+    if project.lower() not in ("all", "*") and not all(
+            p.strip().lower() in known for p in project.split(",") if p.strip()):
+        return jsonify({
+            "error": "unknown_project",
+            "message": f"No project called {project!r}.",
+            "projects": _projects(),
+        }), 400
+
+    if not workspace:
+        workspace = _workspaces(system.lower())[1]
 
     if (system.lower(), control_id.lower()) not in SUPPORTED:
         return jsonify({
@@ -253,6 +313,7 @@ def prepare():
     job = {
         "id": job_id, "system": system, "controlId": control_id,
         "period": period, "month": month,
+        "workspace": workspace, "project": project,
         "status": "running", "phase": "starting", "phaseDetail": "",
         "startedAt": _now(), "finishedAt": None, "exitCode": None, "error": None,
         "screenshots": 0, "warnings": [], "artifacts": [], "log": [], "pid": None,
@@ -266,7 +327,8 @@ def prepare():
         "--profile", str(PROFILE_DIR),
         "--no-pause",
         "--env", system.lower(),
-        "--workspace", os.environ.get("CAPTURE_WORKSPACE", "Production"),
+        "--workspace", workspace,
+        "--project", project,
         "--settle", os.environ.get("CAPTURE_SETTLE", "4.0"),
     ]
     try:

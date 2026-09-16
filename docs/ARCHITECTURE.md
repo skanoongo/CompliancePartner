@@ -112,7 +112,13 @@ would otherwise have been false, and two tags loading the additions.
 
 - `startPrepare()` - POSTs to `/api/prepare` and polls, but only for a system and
   control that `/api/capabilities` says is real. Otherwise it calls straight through
-  to the original simulation.
+  to the original simulation. The chosen workspace and project go with the request.
+- The idle state of a live control renders a scope panel instead of the prototype's
+  empty state: a Workspace box (from `/api/scope`, which reads `workspaces:` in the
+  config) and a Project box (the `SECTIONS` tab names). Both are validated server-side
+  before a browser is launched, so a bad value fails in a second rather than after an
+  SSO round-trip - and an unknown project is rejected rather than falling back to
+  capturing everything.
 - `workflow(r)` - renders the live panel (phase, log tail, sign-in prompt, then the
   real artifacts) when a record has a job attached, and the original otherwise.
 - `render()` - badges the control rows that are backed by a real capture.

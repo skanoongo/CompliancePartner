@@ -48,6 +48,24 @@
   word-break: break-word;
 }
 
+.cp-scope {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.cp-scopegrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 12px 0 4px;
+}
+
+.cp-scopegrid .select { width: 100%; }
+.cp-scope .fieldlabel { display: block; margin-bottom: 5px; }
+
 .cp-evidence {
   margin-top: 18px;
   padding: 16px 18px;
@@ -69,6 +87,7 @@
 .cp-warnlist div { padding: 3px 0; }
 
 @media (max-width: 700px) {
-  .cp-live, .cp-evidence { padding: 14px; }
+  .cp-live, .cp-evidence, .cp-scope { padding: 14px; }
   .cp-log { font-size: 11px; max-height: 200px; }
+  .cp-scopegrid { grid-template-columns: 1fr; }
 }

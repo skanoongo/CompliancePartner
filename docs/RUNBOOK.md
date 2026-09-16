@@ -3,10 +3,11 @@
 ## Monthly Workato change-management review
 
 1. `docker compose up -d` and open the site.
-2. **Workato** → **Change management** → **Prepare**.
+2. **Workato** → **Change management**. Pick the **Workspace** the recipes live in
+   and the **Project** to cover (or *All projects*), then **Prepare**.
 3. If it asks for sign-in, click **Open the browser session**, complete SSO in that
-   tab, and switch the workspace to **CoreWeave → Production** if it is not already.
-   Then leave the tab alone - the capture is driving that browser.
+   tab, and switch to the workspace you selected if it is not already there. Then
+   leave the tab alone - the capture is driving that browser.
 4. Wait. A run is roughly 20-40 minutes and ~30 screenshots. The panel shows the
    folder and recipe it is on.
 5. When it finishes, download the workbook. **Read the warnings** if there are any.
@@ -28,12 +29,19 @@ renamed after upload:
 
 ### "Waiting for login" never clears
 
-The capture only continues once the page looks signed in - a Workato URL, and at
-least two of *projects / recipes / connections / workspace* in the page text. If you
-have signed in and it is still waiting, open the browser session and check you are
-on the Workato dashboard rather than an SSO interstitial or a workspace picker.
+The capture continues once the browser is on a Workato URL that is not a login page
+and shows no password box. If you have signed in and it is still waiting, open the
+browser session and check you are not sitting on an SSO interstitial or a consent
+screen. It re-navigates to the app every 20s to re-check, so a sign-in that completed
+through a redirect chain is picked up on the next probe rather than missed.
 
 To start over from a clean session: `curl -X POST http://localhost:8080/api/session/reset`.
+
+### The workbook has fewer tabs than expected
+
+A scoped run only builds tabs for the projects it captured. An out-of-scope project
+gets no sheet at all, deliberately - a blank sheet saying "no changes" would be a
+claim the run never checked. `manifest.json` records the scope under `projects`.
 
 ### It aborted on the workspace check
 
@@ -41,8 +49,10 @@ To start over from a clean session: `curl -X POST http://localhost:8080/api/sess
 Workspace 'Production' was never visible after 20 checks.
 ```
 
-The browser is in the wrong workspace. Open the browser session, switch to
-**CoreWeave → Production**, and run it again. It aborts rather than continuing
+The **Workspace** chosen on the page is not the one the browser is showing. Either
+switch workspace in the browser session, or choose the right one in the Workspace box
+and run it again. The list in that box comes from `workspaces:` in
+`config/environments.yaml`. It aborts rather than continuing
 because evidence captured from the wrong workspace is evidence for the wrong
 population - it would look fine and be wrong.
 
@@ -88,7 +98,9 @@ been lowered, put it back.
 
 ## Changing what gets captured
 
-`SECTIONS` at the top of `runner/workato_sox_capture.py`. Each folder carries:
+`SECTIONS` at the top of `runner/workato_sox_capture.py`. Each section's `tab` is
+what the **Project** box offers, so adding one there adds it to the page. Each folder
+carries:
 
 - `fid` - the Workato folder id, or `None` to resolve it from a known recipe
 - `known` - recipe id → name, used as a fallback when discovery comes up empty

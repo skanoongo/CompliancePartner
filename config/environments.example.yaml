@@ -43,6 +43,13 @@ environments:
     # Workspace that must be visible on every captured page. The capture aborts
     # rather than collect evidence from the wrong one.
     workspace: Production
+    # Offered in the Workspace box on the page. List the ones this account can
+    # actually reach - a name that does not exist fails the capture's own check
+    # several minutes into a run, after the sign-in.
+    workspaces:
+      - Production
+      - CW Agentic
+      - Development
 
   # ---------------------------------------------------------------- NetSuite
   netsuite:

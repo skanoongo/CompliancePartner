@@ -163,6 +163,43 @@ RECIPE_RE = re.compile(r"/recipes/(\d+)")
 FID_RE = re.compile(r"[?&]fid=(\d+)")
 
 
+def project_names():
+    """The projects that can be captured - one per workbook tab."""
+    return [s["tab"] for s in SECTIONS]
+
+
+def select_sections(selection):
+    """Narrow SECTIONS to the chosen projects.
+
+    `selection` is a comma-separated list of project names, matched against the tab
+    name and against folder names inside it, case-insensitively. Empty, "all" or no
+    match on a name raises rather than silently capturing everything: a review
+    scoped to one project that quietly captured all of them would be wrong in a way
+    nobody would notice until it was in front of an auditor.
+    """
+    if not selection or selection.strip().lower() in ("", "all", "*"):
+        return SECTIONS
+
+    wanted = [w.strip().lower() for w in selection.split(",") if w.strip()]
+    chosen, unmatched = [], []
+    for w in wanted:
+        hit = [s for s in SECTIONS
+               if w == s["tab"].lower()
+               or w in s["tab"].lower()
+               or any(w in f["name"].lower() for f in s["folders"])]
+        if not hit:
+            unmatched.append(w)
+        for s in hit:
+            if s not in chosen:
+                chosen.append(s)
+
+    if unmatched:
+        raise SystemExit(
+            "No project matches: " + ", ".join(unmatched) + "\n"
+            "Known projects: " + " | ".join(project_names()))
+    return chosen
+
+
 # --------------------------------------------------------------------------- #
 # helpers                                                                      #
 # --------------------------------------------------------------------------- #
@@ -849,16 +886,23 @@ def capture(args, out_dir):
 
         cap = Capturer(page, out_dir, args.settle, args.month, app_name, args.display, args.max_parts,
                        args.workspace)
-        phase("capturing", str(sum(len(s["folders"]) for s in SECTIONS)))
-        for section in SECTIONS:
+        sections = select_sections(args.project)
+        if sections is not SECTIONS:
+            log(f"Scoped to {len(sections)} of {len(SECTIONS)} projects: "
+                + ", ".join(s["tab"] for s in sections))
+        phase("capturing", str(sum(len(s["folders"]) for s in sections)))
+        for section in sections:
             log(f"=== Tab: {section['tab']} ===")
             for folder in section["folders"]:
                 cap.run_folder(section["tab"], folder)
 
         manifest_path = out_dir / "manifest.json"
         manifest_path.write_text(json.dumps(
-            {"month": args.month, "workspace": args.workspace, "captures": cap.manifest,
-             "warnings": cap.warnings}, indent=2))
+            {"month": args.month, "workspace": args.workspace,
+             # What was in scope, so a reader can tell "nothing changed" apart from
+             # "this was never looked at".
+             "projects": [s["tab"] for s in sections],
+             "captures": cap.manifest, "warnings": cap.warnings}, indent=2))
         log(f"Manifest written: {manifest_path} ({len(cap.manifest)} screenshots)")
         if cap.warnings:
             print("\n==== WARNINGS - review these screenshots before sending ====")
@@ -878,14 +922,23 @@ PX_PER_ROW = 20  # default 15pt row ~ 20px
 def build_workbook(manifest_path, out_path, max_width=1400):
     data = json.loads(Path(manifest_path).read_text())
     month = data["month"]
+    workspace = data.get("workspace", "")
+    # Projects the run actually covered. Older manifests have no such key, and for
+    # those every project was in scope.
+    scope = data.get("projects") or [s["tab"] for s in SECTIONS]
+
     wb = Workbook()
     wb.remove(wb.active)
     sheets = {}
     for s in SECTIONS:
+        if s["tab"] not in scope:
+            continue          # out of scope: no sheet at all, rather than a blank one
         ws = wb.create_sheet(title=s["tab"][:31])
         ws.column_dimensions["A"].width = 200
         ws["A1"] = f"Workato CM Review - {month} - {s['tab']}"
         ws["A1"].font = Font(bold=True, size=14)
+        if workspace:
+            ws["A2"] = f"Workspace: {workspace}"
         sheets[s["tab"]] = {"ws": ws, "row": 3}
 
     wb_img_dir = Path(manifest_path).parent / "_workbook_images"
@@ -929,11 +982,25 @@ def main():
     ap.add_argument("--no-pause", action="store_true")
     ap.add_argument("--env", default="workato",
                     help="section in config/environments.yaml to sign in with")
+    ap.add_argument("--project", default="all",
+                    help='projects to capture, comma-separated, or "all" '
+                         '(choices: ' + " | ".join(project_names()) + ")")
+    ap.add_argument("--list-projects", action="store_true",
+                    help="print the projects this script knows about and exit")
     ap.add_argument("--username", default="", help="overrides the configured username")
     # Deliberately no --password: a password on the command line is visible to
     # every process on the box via `ps`. It comes from the config file, which may
     # itself read it from the environment as ${VAR}.
     args = ap.parse_args()
+
+    if args.list_projects:
+        for p in project_names():
+            print(p)
+        return
+
+    # Validate the scope before signing in to anything, so a typo fails in a
+    # second rather than after a browser and an SSO round-trip.
+    select_sections(args.project)
 
     # Credentials, if any are configured. No config file at all is fine: the login
     # is then interactive, which is how this script worked before.

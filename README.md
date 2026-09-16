@@ -27,12 +27,30 @@ docker compose up -d --build
 open http://localhost:8080/
 ```
 
-Select **Workato** → **Change management** → **Prepare**. The first run needs a
-one-time SSO sign-in: the page shows an **Open the browser session** button, which
-opens the runner's own browser in a tab. Sign in there and the capture carries on by
-itself. The session is remembered, so later runs start straight away.
+Select **Workato** → **Change management**, choose a **Workspace** and a **Project**,
+then **Prepare**. The first run needs a one-time SSO sign-in: the page shows an
+**Open the browser session** button, which opens the runner's own browser in a tab.
+Sign in there and the capture carries on by itself. The session is remembered, so
+later runs start straight away.
 
-A full run takes roughly 20-40 minutes and produces ~30 screenshots.
+A full run takes roughly 20-40 minutes and produces ~30 screenshots; a single
+project is proportionally quicker.
+
+### Workspace and Project
+
+Both are part of the run's scope, so both are recorded on the job and in
+`manifest.json`, and both are shown on the finished evidence.
+
+**Workspace** is checked, not just labelled. The capture confirms the name is
+visible on every page before it shoots and aborts if it is not, so a run can never
+quietly collect evidence from the wrong workspace. The list comes from
+`workspaces:` in `config/environments.yaml` - list the ones the account can really
+reach, because a name that does not exist fails several minutes into a run, after
+the sign-in.
+
+**Project** narrows the capture to one area. Only the projects captured get a tab in
+the workbook: an out-of-scope project has no sheet at all rather than an empty one,
+so a scoped run cannot be misread as "nothing changed" everywhere else.
 
 ## Publishing it under its hostname
 
@@ -87,6 +105,12 @@ expose the same display over http, which is how the SSO sign-in happens.
 # a specific month
 docker compose run --rm runner capture --month "August 2026"
 
+# one project, in a named workspace
+docker compose run --rm runner capture --project "2. CPQ" --workspace "CW Agentic"
+
+# what projects are there?
+docker compose run --rm runner capture --list-projects
+
 # screenshots and manifest only, no workbook
 docker compose run --rm runner capture --capture-only
 
@@ -116,7 +140,7 @@ Copy `.env.example` to `.env` and edit. Everything has a working default.
 |---|---|---|
 | `WEB_PORT` | `8080` | host port for the site; set `80` to use the bare hostname |
 | `TZ` | `America/New_York` | the timezone the captured clock reads in |
-| `CAPTURE_WORKSPACE` | `Production` | workspace that must be visible on every captured page |
+| `CAPTURE_WORKSPACE` | `Production` | fallback workspace when the page sends none |
 | `CAPTURE_SETTLE` | `4.0` | seconds to wait after each page load before shooting |
 | `SCREEN_W` / `SCREEN_H` | `1680` / `1050` | virtual screen size |
 
@@ -132,7 +156,8 @@ The page drives these; they are also usable directly.
 |---|---|
 | `GET /api/health` | runner state, whether an SSO session is stored |
 | `GET /api/capabilities` | which system/control pairs are backed by a real capture |
-| `POST /api/prepare` | start a run: `{system, controlId, period}` |
+| `GET /api/scope` | the workspaces and projects the selectors offer |
+| `POST /api/prepare` | start a run: `{system, controlId, period, workspace, project}` |
 | `GET /api/jobs/<id>` | status, phase, log tail, artifacts, warnings |
 | `GET /api/jobs/<id>/log` | the full log |
 | `GET /api/jobs/<id>/artifacts/<name>` | download the workbook, manifest or screenshot bundle |

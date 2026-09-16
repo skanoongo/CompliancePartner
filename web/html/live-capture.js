@@ -22,6 +22,11 @@
   // without a runner behind it simply stays a prototype.
   let LIVE = [];
 
+  // What the Workspace and Project boxes offer, from /api/scope. Both are part of
+  // the run's scope, so both are recorded on the job and in the manifest.
+  let SCOPE = { workspaces: [], defaultWorkspace: '', projects: [] };
+  let chosen = { workspace: '', project: 'all' };
+
   const liveFor = (system, controlId) =>
     LIVE.some(c =>
       c.system.toLowerCase() === String(system).toLowerCase() &&
@@ -33,6 +38,11 @@
     n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB'
       : n >= 1024 ? Math.round(n / 1024) + ' KB'
         : n + ' B';
+
+  // What a run covered, in one line. Shown while it runs and on the finished
+  // evidence, so a workbook is never read without knowing what was in scope.
+  const scopeLine = j =>
+    `${j.workspace || 'workspace ?'} · ${!j.project || j.project === 'all' ? 'all projects' : j.project}`;
 
   const PHASE_TEXT = {
     starting: 'Starting the capture session',
@@ -85,7 +95,7 @@
           <span class="spinner"></span>
           <div>
             <strong>${esc(phaseText)}</strong>
-            <small>Live capture · ${esc(j.screenshots || 0)} screenshot(s) so far${j.phaseDetail ? ' · ' + esc(j.phaseDetail) : ''}</small>
+            <small>${esc(scopeLine(j))} · ${esc(j.screenshots || 0)} screenshot(s) so far${j.phaseDetail ? ' · ' + esc(j.phaseDetail) : ''}</small>
           </div>
           <button class="textbtn" onclick="cpCancel()">Stop</button>
         </div>
@@ -132,7 +142,7 @@
       : '';
 
     return `<div class="cp-evidence">
-              <div class="eyebrow">Captured evidence · ${esc(j.screenshots)} screenshots · ${esc(j.month)}</div>
+              <div class="eyebrow">Captured evidence · ${esc(j.screenshots)} screenshots · ${esc(j.month)} · ${esc(scopeLine(j))}</div>
               ${rows || '<p class="sub">The run finished but produced no files.</p>'}
               <a class="textbtn" href="/api/jobs/${esc(j.id)}/log" target="_blank" rel="noopener">Capture log</a>
             </div>${warn}`;
@@ -168,6 +178,41 @@
               <strong>✓ Management sign-off recorded</strong><br>Captured evidence for ${esc(app.period)} is complete.</div>
             <p class="sub" style="margin-top:10px">Reviewer: Demo management reviewer</p>
             ${r.review ? `<p class="sub">Decision note: ${esc(r.review)}</p>` : ''}`;
+  }
+
+  // The scope chosen before a run: which workspace to capture, and which projects.
+  // Shown in place of the prototype's "Prepare workpaper" empty state, because for
+  // a real capture these two answers decide what the evidence actually covers.
+  function scopePanel() {
+    const ws = SCOPE.workspaces.length ? SCOPE.workspaces : [SCOPE.defaultWorkspace || 'Production'];
+    const wsOpts = ws.map(w =>
+      `<option value="${esc(w)}" ${chosen.workspace === w ? 'selected' : ''}>${esc(w)}</option>`).join('');
+    const prOpts = ['<option value="all"' + (chosen.project === 'all' ? ' selected' : '') +
+      '>All projects</option>'].concat(
+        SCOPE.projects.map(p =>
+          `<option value="${esc(p)}" ${chosen.project === p ? 'selected' : ''}>${esc(p)}</option>`)).join('');
+
+    return steps(0) + `
+      <div class="cp-scope">
+        <div class="eyebrow">Capture scope</div>
+        <div class="cp-scopegrid">
+          <div>
+            <label class="fieldlabel" for="cpWorkspace">Workspace</label>
+            <select id="cpWorkspace" class="select" onchange="cpSetWorkspace(this.value)">${wsOpts}</select>
+          </div>
+          <div>
+            <label class="fieldlabel" for="cpProject">Project</label>
+            <select id="cpProject" class="select" onchange="cpSetProject(this.value)">${prOpts}</select>
+          </div>
+        </div>
+        <p class="sub">The capture confirms the workspace is visible on every page before
+        it shoots, and stops rather than collect evidence from a different one. Only the
+        chosen project gets a tab in the workbook, so a scoped run cannot be read as
+        &ldquo;nothing changed&rdquo; elsewhere.</p>
+        <div class="actions">
+          <button class="btn primary" onclick="startPrepare()">Prepare workpaper</button>
+        </div>
+      </div>`;
   }
 
   function livePanel(r) {
@@ -219,8 +264,14 @@
 
   const protoWorkflow = workflow;
   workflow = function (r) {
-    return r.live ? livePanel(r) : protoWorkflow(r);
+    if (r.live) return livePanel(r);
+    // A live control that has not been run yet asks for its scope first.
+    if (isLive() && r.stage === 'idle') return scopePanel();
+    return protoWorkflow(r);
   };
+
+  window.cpSetWorkspace = function (v) { chosen.workspace = v; };
+  window.cpSetProject = function (v) { chosen.project = v; };
 
   const protoStartPrepare = startPrepare;
   startPrepare = async function () {
@@ -241,7 +292,9 @@
         system: app.system,
         controlId: controls[app.control].id,
         period: app.period,
-        month: captureMonth()
+        month: captureMonth(),
+        workspace: chosen.workspace || SCOPE.defaultWorkspace,
+        project: chosen.project || 'all'
       })
     });
 
@@ -313,9 +366,15 @@
 
   // ------------------------------------------------------------------ startup
 
-  api('/api/capabilities').then(({ ok, body }) => {
-    if (!ok || !body || !body.live) return;
-    LIVE = body.live;
-    render();
-  }).catch(() => { /* no runner: the page stays a prototype */ });
+  Promise.all([api('/api/capabilities'), api('/api/scope')])
+    .then(([caps, sc]) => {
+      if (!caps.ok || !caps.body || !caps.body.live) return;
+      LIVE = caps.body.live;
+      if (sc.ok && sc.body) {
+        SCOPE = sc.body;
+        chosen.workspace = SCOPE.defaultWorkspace || (SCOPE.workspaces[0] || '');
+      }
+      render();
+    })
+    .catch(() => { /* no runner: the page stays a prototype */ });
 })();
