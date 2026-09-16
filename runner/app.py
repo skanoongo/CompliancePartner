@@ -104,7 +104,16 @@ def _collect_artifacts(job):
         found.append({"name": manifest.name, "kind": "manifest", "bytes": manifest.stat().st_size})
         try:
             data = json.loads(manifest.read_text())
-            job["warnings"] = data.get("warnings", [])
+            # MERGE, never replace. The manifest carries only the workspace-visibility
+            # warnings the capture tracks itself; the "!!" lines picked off the log
+            # (an unreachable folder, a recipe count that never recovered) exist only
+            # in the stream. Overwriting here reported a clean run for one that was
+            # not, which is the one failure this tool must never have.
+            seen = list(job["warnings"])
+            for w in data.get("warnings", []):
+                if w not in seen:
+                    seen.append(w)
+            job["warnings"] = seen
             job["screenshots"] = len(data.get("captures", []))
         except (ValueError, OSError):
             pass
