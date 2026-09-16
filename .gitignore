@@ -1,0 +1,28 @@
+# Local config
+.env
+
+# Live credentials for production systems. The .example file is the only one that
+# is ever committed. Do not remove these two lines.
+config/environments.yaml
+config/*.local.yaml
+
+# Capture output: screenshots of a signed-in Workato session, and the workbooks
+# built from them. This is evidence for a specific review period - it belongs in
+# the review's own record, never in the repo.
+/data/
+runs/
+sox_*/
+*.xlsx
+manifest.json
+screenshots.zip
+*.png
+!docs/**/*.png
+
+# Browser profile - holds a live Workato session cookie.
+browser-profile/
+.workato_sox_browser_profile/
+
+python_modules/
+__pycache__/
+*.py[cod]
+.DS_Store

@@ -1,0 +1,117 @@
+# Compliance Partner - environment credentials.
+#
+#   cp config/environments.example.yaml config/environments.yaml
+#
+# config/environments.yaml is gitignored and must stay that way: it holds live
+# credentials for production systems. This example file is the one that is
+# committed, and it must never contain a real secret.
+#
+# One section per system offered in the Compliance Partner page. Only the ones
+# with `enabled: true` AND a capture behind them actually run today - that is
+# Workato. The rest are here so the shape is settled before their captures exist.
+#
+# PASSWORDS
+# ---------
+# Prefer NOT to write a password here at all. Any value may instead be written as
+# ${VAR}, which is read from the runner's environment at load time:
+#
+#     password: ${WORKATO_PASSWORD}
+#
+# and supplied by the shell, a .env file, or a secrets manager. A password that
+# only ever lives in a process environment is one that cannot be committed by
+# accident.
+#
+# SSO AND MFA
+# -----------
+# `login: form` fills the username and password on the sign-in page. It cannot
+# complete an SSO redirect or an MFA challenge - nothing can, without a human. When
+# a login needs either, the run pauses and asks a person to finish it in the
+# browser session, exactly as it does with no credentials configured. Set
+# `login: interactive` to skip the form attempt and go straight there.
+
+environments:
+
+  # ------------------------------------------------------------------ Workato
+  # The only system with a capture behind it today.
+  workato:
+    name: Workato
+    enabled: true
+    base_url: https://app.workato.com
+    login: form
+    username: someone@coreweave.com
+    password: ${WORKATO_PASSWORD}
+    # Workspace that must be visible on every captured page. The capture aborts
+    # rather than collect evidence from the wrong one.
+    workspace: Production
+
+  # ---------------------------------------------------------------- NetSuite
+  netsuite:
+    name: NetSuite
+    enabled: false
+    base_url: https://system.netsuite.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${NETSUITE_PASSWORD}
+
+  # ----------------------------------------------------------------- Workday
+  workday:
+    name: Workday
+    enabled: false
+    base_url: https://www.myworkday.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${WORKDAY_PASSWORD}
+
+  # -------------------------------------------------------------- Salesforce
+  salesforce:
+    name: Salesforce
+    enabled: false
+    base_url: https://login.salesforce.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${SALESFORCE_PASSWORD}
+
+  # ------------------------------------------------------------------- Coupa
+  coupa:
+    name: Coupa
+    enabled: false
+    base_url: https://coreweave.coupahost.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${COUPA_PASSWORD}
+
+  # ---------------------------------------------------------------- Orderful
+  orderful:
+    name: Orderful
+    enabled: false
+    base_url: https://app.orderful.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${ORDERFUL_PASSWORD}
+
+  # ------------------------------------------------------------------ GitHub
+  github:
+    name: GitHub
+    enabled: false
+    base_url: https://github.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${GITHUB_PASSWORD}
+
+  # -------------------------------------------------------------------- Okta
+  okta:
+    name: Okta
+    enabled: false
+    base_url: https://coreweave.okta.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${OKTA_PASSWORD}
+
+  # ---------------------------------------------------------------- FloQast
+  floqast:
+    name: FloQast
+    enabled: false
+    base_url: https://go.floqast.com
+    login: interactive
+    username: someone@coreweave.com
+    password: ${FLOQAST_PASSWORD}

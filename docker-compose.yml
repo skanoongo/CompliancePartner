@@ -1,0 +1,63 @@
+# Compliance Partner - website + capture runner.
+#
+#   docker compose up -d --build
+#   open http://localhost:${WEB_PORT:-8080}/
+#
+# To reach it under its published name, add this to /etc/hosts and set WEB_PORT=80:
+#   127.0.0.1  cw_CompliancePartnercore.internal.coreweave.com cw-compliancepartnercore.internal.coreweave.com
+
+name: compliance-partner
+
+services:
+  # The website: cw_CompliancePartnercore.internal.coreweave.com
+  web:
+    build: ./web
+    image: compliance-partner-web:latest
+    container_name: cw_CompliancePartnercore
+    hostname: cw-compliancepartnercore
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      - runner
+    networks:
+      default:
+        aliases:
+          # Underscores are illegal in a hostname, so Docker's DNS will not accept
+          # the underscored spelling as an alias. nginx still answers to it - see
+          # server_name in web/nginx.conf - it just cannot be resolved by that name
+          # from inside the compose network.
+          - cw-compliancepartnercore.internal.coreweave.com
+
+  # The capture runner: virtual desktop + browser + job API.
+  runner:
+    build: ./runner
+    image: compliance-partner-runner:latest
+    container_name: compliance-partner-runner
+    restart: unless-stopped
+    environment:
+      # Where the page sends people to finish SSO. Must be reachable from THEIR
+      # browser, so it is the public URL of the site, not a container address.
+      CAPTURE_SESSION_URL: "${CAPTURE_SESSION_URL:-/session/vnc.html?path=session/websockify&autoconnect=1&resize=remote}"
+      CAPTURE_WORKSPACE: "${CAPTURE_WORKSPACE:-Production}"
+      CAPTURE_SETTLE: "${CAPTURE_SETTLE:-4.0}"
+      SCREEN_W: "${SCREEN_W:-1680}"
+      SCREEN_H: "${SCREEN_H:-1050}"
+      # The captured clock reads in this zone. Set it to the reviewer's zone so the
+      # timestamps in the evidence match the period being tested.
+      TZ: "${TZ:-America/New_York}"
+    volumes:
+      # Keeps the SSO session and every run's output across restarts.
+      - capture-data:/data
+      # Credentials, read-only. Mounted rather than copied in, so secrets never
+      # become an image layer. Safe when the file does not exist: the runner then
+      # has no environments configured and every login is interactive.
+      - ./config:/config:ro
+    # Chromium needs more than the default 64MB of shared memory or tabs crash.
+    shm_size: "1gb"
+    expose:
+      - "8000"
+      - "6080"
+
+volumes:
+  capture-data:

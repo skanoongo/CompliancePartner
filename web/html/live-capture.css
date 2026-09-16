@@ -1,0 +1,74 @@
+/* Styling for the live-capture panel. Borrows the prototype's tokens so a real
+   run looks like part of the same product, with one deliberate difference: the
+   teal "Live capture" badge, which marks the controls that actually touch a system. */
+
+.cp-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e4f4f0;
+  color: var(--teal);
+  border: 1px solid #bfe3db;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+.cp-live {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.cp-livehead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cp-livehead strong { display: block; }
+.cp-livehead small { display: block; color: var(--muted); margin-top: 2px; }
+.cp-livehead > div { flex: 1; }
+
+.cp-log {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 9px;
+  background: #11172a;
+  color: #cfd9ee;
+  font: 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cp-evidence {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid #cde9dd;
+  border-radius: 12px;
+  background: #f6fbf8;
+}
+
+.cp-evidence .eyebrow { margin-bottom: 12px; }
+.cp-evidence .attachment { background: white; }
+
+.cp-warnlist {
+  margin-top: 10px;
+  max-height: 180px;
+  overflow: auto;
+  font: 11.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.cp-warnlist div { padding: 3px 0; }
+
+@media (max-width: 700px) {
+  .cp-live, .cp-evidence { padding: 14px; }
+  .cp-log { font-size: 11px; max-height: 200px; }
+}
