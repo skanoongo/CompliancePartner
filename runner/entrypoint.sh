@@ -86,6 +86,14 @@ case "${1:-serve}" in
         exec python3 /app/workato_sox_capture.py \
             --profile "$CAPTURE_DATA_DIR/browser-profile" "$@"
         ;;
+    users)
+        # The user access review, straight from the CLI:
+        #   docker compose run --rm runner users --period "Q3 FY26"
+        start_desktop
+        shift
+        exec python3 /app/workato_uar_capture.py \
+            --profile "$CAPTURE_DATA_DIR/browser-profile" "$@"
+        ;;
     shell)
         start_desktop
         exec bash

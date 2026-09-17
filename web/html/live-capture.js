@@ -40,9 +40,16 @@
         : n + ' B';
 
   // What a run covered, in one line. Shown while it runs and on the finished
-  // evidence, so a workbook is never read without knowing what was in scope.
-  const scopeLine = j =>
-    `${j.workspace || 'workspace ?'} · ${!j.project || j.project === 'all' ? 'all projects' : j.project}`;
+  // evidence, so a workbook is never read without knowing what was in scope. The
+  // second half depends on the control: a change review is scoped by project, an
+  // access review by the period it is labelled with.
+  const scopeLine = (j) => {
+    const ws = j.workspace || 'workspace ?';
+    if (String(j.controlId || '').toUpperCase() === 'UA-04') {
+      return `${ws} · ${j.period || 'period ?'}`;
+    }
+    return `${ws} · ${!j.project || j.project === 'all' ? 'all projects' : j.project}`;
+  };
 
   const PHASE_TEXT = {
     starting: 'Starting the capture session',
@@ -122,13 +129,67 @@
       changed in Workato.</p>`;
   }
 
+  // The user access review's deliverable is the listing itself, so it is shown on
+  // the page rather than left inside a download. Counts first, then the roster.
+  const USER_ROWS_SHOWN = 60;
+
+  function userCard(j) {
+    const u = j.users;
+    if (!u) return '';
+
+    const tiles = [
+      ['Total collaborators', u.total, ''],
+      ['Active', u.active, 'good'],
+      ['Inactive / suspended', u.inactive, ''],
+      ['Pending invitation', u.pending, ''],
+    ].concat(u.unknown ? [['Status unrecognised', u.unknown, 'warn']] : []);
+
+    const shown = (u.rows || []).slice(0, USER_ROWS_SHOWN);
+    const more = (u.rows || []).length - shown.length;
+
+    const body = shown.map(r => {
+      const cls = r.active === true ? 'active' : r.status === 'pending' ? 'pending'
+        : r.active === false ? 'inactive' : 'unknown';
+      const verdict = r.active === true ? 'Active' : r.status === 'pending' ? 'Pending'
+        : r.active === false ? 'Inactive' : 'Unrecognised';
+      return `<tr class="cp-u-${cls}">
+                <td>${esc(r.name || '')}</td>
+                <td>${esc(r.email || '')}</td>
+                <td>${esc(r.role || '')}</td>
+                <td>${esc(r.status_raw || '—')}</td>
+                <td><span class="cp-pill cp-${cls}">${verdict}</span></td>
+              </tr>`;
+    }).join('');
+
+    return `<div class="cp-users">
+        <div class="eyebrow">Collaborators · ${esc(u.workspace || '')} · listed for ${esc(u.period || j.period || '')}</div>
+        <div class="cp-tiles">
+          ${tiles.map(([k, v, c]) => `<div class="cp-tile ${c}"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}
+        </div>
+        ${u.total ? `<div class="cp-tablewrap"><table class="cp-utable">
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status as shown</th><th>Verdict</th></tr></thead>
+            <tbody>${body}</tbody></table></div>
+          ${more > 0 ? `<p class="sub">${more} more in the workbook and users.csv.</p>` : ''}`
+        : `<div class="notice amber" style="margin-top:14px"><strong>No collaborators could be read</strong><br>
+             The page opened but no rows were recognised. Check the screenshots - this is
+             not evidence that the workspace has no users.</div>`}
+        <p class="sub">Point-in-time listing taken ${esc((u.capturedAt || '').replace('T', ' ').slice(0, 19))}
+        and labelled ${esc(u.period || '')}. Workato publishes no historical roster, so this
+        evidences access as it stood when the capture ran.</p>
+      </div>`;
+  }
+
   function artifactCard(j) {
     const rows = (j.artifacts || []).map(a => {
-      const label = a.kind === 'workbook' ? 'Excel workbook · one tab per control area'
+      const label = a.kind === 'workbook' ? 'Excel workbook'
         : a.kind === 'manifest' ? 'Capture manifest · URL and timestamp per screenshot'
-          : a.kind === 'screenshots' ? `${a.count} full-screen captures` : a.kind;
+          : a.kind === 'screenshots' ? `${a.count} full-screen captures`
+            : a.kind === 'users' ? 'Collaborator listing · full detail, JSON'
+              : a.kind === 'userscsv' ? 'Collaborator listing · spreadsheet'
+                : a.kind;
       return `<div class="attachment">
-                <span class="circle">${a.kind === 'workbook' ? '▤' : a.kind === 'screenshots' ? '▦' : '⋯'}</span>
+                <span class="circle">${a.kind === 'workbook' ? '▤' : a.kind === 'screenshots' ? '▦'
+                  : (a.kind === 'users' || a.kind === 'userscsv') ? '◎' : '⋯'}</span>
                 <div style="flex:1"><strong>${esc(a.name)}</strong><small>${esc(label)} · ${bytes(a.bytes)}</small></div>
                 <a class="textbtn" href="/api/jobs/${esc(j.id)}/artifacts/${encodeURIComponent(a.name)}">Download</a>
               </div>`;
@@ -183,7 +244,15 @@
   // The scope chosen before a run: which workspace to capture, and which projects.
   // Shown in place of the prototype's "Prepare workpaper" empty state, because for
   // a real capture these two answers decide what the evidence actually covers.
+  const scopeOf = () => {
+    const c = LIVE.find(x =>
+      x.system.toLowerCase() === app.system.toLowerCase() &&
+      x.controlId.toLowerCase() === controls[app.control].id.toLowerCase());
+    return (c && c.scope) || ['workspace'];
+  };
+
   function scopePanel() {
+    const needsProject = scopeOf().includes('project');
     const ws = SCOPE.workspaces.length ? SCOPE.workspaces : [SCOPE.defaultWorkspace || 'Production'];
     const wsOpts = ws.map(w =>
       `<option value="${esc(w)}" ${chosen.workspace === w ? 'selected' : ''}>${esc(w)}</option>`).join('');
@@ -201,14 +270,18 @@
             <select id="cpWorkspace" class="select" onchange="cpSetWorkspace(this.value)">${wsOpts}</select>
           </div>
           <div>
-            <label class="fieldlabel" for="cpProject">Project</label>
-            <select id="cpProject" class="select" onchange="cpSetProject(this.value)">${prOpts}</select>
+            <label class="fieldlabel" for="${needsProject ? 'cpProject' : 'cpPeriod'}">${needsProject ? 'Project' : 'Review period'}</label>
+            ${needsProject
+              ? `<select id="cpProject" class="select" onchange="cpSetProject(this.value)">${prOpts}</select>`
+              : `<input id="cpPeriod" class="select" value="${esc(app.period)}" readonly
+                        aria-describedby="cpPeriodHint" title="Set with the Period selector at the top of the page">`}
           </div>
         </div>
-        <p class="sub">The capture confirms the workspace is visible on every page before
-        it shoots, and stops rather than collect evidence from a different one. Only the
-        chosen project gets a tab in the workbook, so a scoped run cannot be read as
-        &ldquo;nothing changed&rdquo; elsewhere.</p>
+        <p class="sub" id="cpPeriodHint">The capture confirms the workspace is visible on every page
+        before it reads anything, and stops rather than collect evidence from a different one.
+        ${needsProject
+          ? 'Only the chosen project gets a tab in the workbook, so a scoped run cannot be read as &ldquo;nothing changed&rdquo; elsewhere.'
+          : 'The review period comes from the Period selector at the top of the page. The collaborator list is a point-in-time snapshot labelled with it - Workato publishes no historical roster.'}</p>
         <div class="actions">
           <button class="btn primary" onclick="startPrepare()">Prepare workpaper</button>
         </div>
@@ -220,7 +293,7 @@
     if (j.status === 'running') return runningPanel(r);
     if (j.status !== 'succeeded') return failedPanel(r);
     const n = { generated: 1, returned: 1, submitted: 2, approved: 3 }[r.stage] ?? 1;
-    return steps(n) + artifactCard(j) + reviewBody(r) +
+    return steps(n) + userCard(j) + artifactCard(j) + reviewBody(r) +
       `<details class="audit"><summary style="font-size:11px;color:var(--muted);cursor:pointer">Activity history (${r.events.length})</summary>${r.events.map(e => `<div>${esc(e)}</div>`).join('')}</details>`;
   }
 

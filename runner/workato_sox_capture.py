@@ -856,27 +856,39 @@ def ensure_workspace(page, name, tries=20, wait_s=15):
         time.sleep(wait_s)
 
 
-def capture(args, out_dir):
-    profile_dir = Path(args.profile).expanduser()
+APP_NAME = "Chrom"  # substring match: Chromium / Google Chrome / Google Chrome for Testing
+
+
+def launch_browser(p, profile, browser="chromium"):
+    """Open the persistent browser, sized to leave the clock strip uncovered.
+
+    Shared by every capture in this repo. The window geometry is part of how the
+    evidence is framed, so it must not be re-derived per script and drift.
+    """
+    profile_dir = Path(profile).expanduser()
     profile_dir.mkdir(parents=True, exist_ok=True)
     sw, sh = screen_size()
-    app_name = "Chrom"  # substring match: Chromium / Google Chrome / Google Chrome for Testing
+    kwargs = dict(
+        user_data_dir=str(profile_dir),
+        headless=False,
+        no_viewport=True,  # let the real window size drive the page
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            # Leave the reserved strip (the clock) uncovered. WINDOW_OFFSET_Y is 0
+            # on a normal desktop, where the OS keeps its own bar on top anyway.
+            f"--window-position=0,{WINDOW_OFFSET_Y}",
+            f"--window-size={sw},{sh - WINDOW_OFFSET_Y}",
+        ],
+    )
+    if browser == "chrome":
+        kwargs["channel"] = "chrome"
+    return p.chromium.launch_persistent_context(**kwargs)
+
+
+def capture(args, out_dir):
+    app_name = APP_NAME
     with sync_playwright() as p:
-        kwargs = dict(
-            user_data_dir=str(profile_dir),
-            headless=False,
-            no_viewport=True,  # let the real window size drive the page
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                # Leave the reserved strip (the clock) uncovered. WINDOW_OFFSET_Y is 0
-                # on a normal desktop, where the OS keeps its own bar on top anyway.
-                f"--window-position=0,{WINDOW_OFFSET_Y}",
-                f"--window-size={sw},{sh - WINDOW_OFFSET_Y}",
-            ],
-        )
-        if args.browser == "chrome":
-            kwargs["channel"] = "chrome"
-        ctx = p.chromium.launch_persistent_context(**kwargs)
+        ctx = launch_browser(p, args.profile, args.browser)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.set_default_timeout(60000)
 

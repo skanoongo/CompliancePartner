@@ -45,8 +45,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium \
     && rm -rf /root/.cache
 
-COPY workato_sox_capture.py app.py environments.py entrypoint.sh ./
-RUN chmod +x entrypoint.sh workato_sox_capture.py
+COPY workato_sox_capture.py workato_uar_capture.py app.py environments.py entrypoint.sh ./
+RUN chmod +x entrypoint.sh workato_sox_capture.py workato_uar_capture.py
 
 # Credentials are MOUNTED at /config, never copied in: an image layer is forever,
 # and it travels to whatever registry the image is pushed to.

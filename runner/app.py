@@ -41,8 +41,22 @@ PROFILE_DIR = DATA_DIR / "browser-profile"
 SESSION_URL = os.environ.get("CAPTURE_SESSION_URL", "")
 LOG_TAIL_LINES = 400
 
-# (system, control id) pairs backed by a real capture.
-SUPPORTED = {("workato", "cm-02")}
+# (system, control id) -> the capture that backs it. A pair absent from here has no
+# real capture, and /api/prepare refuses it rather than let the page imply one ran.
+CAPTURES = {
+    ("workato", "cm-02"): {
+        "script": "workato_sox_capture.py",
+        "control": "Change management",
+        "scope": ["workspace", "project"],
+        "produces": ["Excel workbook", "screenshot manifest", "screenshots"],
+    },
+    ("workato", "ua-04"): {
+        "script": "workato_uar_capture.py",
+        "control": "User access review",
+        "scope": ["workspace", "period"],
+        "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
+    },
+}
 
 app = Flask(__name__)
 
@@ -79,6 +93,7 @@ def _public(job):
         "screenshots": job["screenshots"],
         "warnings": job["warnings"],
         "artifacts": job["artifacts"],
+        "users": job["users"],
         "sessionUrl": SESSION_URL if job["phase"] == "awaiting_login" else "",
         "log": job["log"][-LOG_TAIL_LINES:],
     }
@@ -120,6 +135,35 @@ def _collect_artifacts(job):
             job["screenshots"] = len(data.get("captures", []))
         except (ValueError, OSError):
             pass
+
+    # A user access review's real output is the listing, not the screenshots, so the
+    # counts go on the job and the page can show them without downloading anything.
+    users_json = out / "users.json"
+    if users_json.is_file():
+        found.append({"name": users_json.name, "kind": "users",
+                      "bytes": users_json.stat().st_size})
+        try:
+            data = json.loads(users_json.read_text())
+            rows = data.get("users", [])
+            job["users"] = {
+                "total": len(rows),
+                "active": sum(1 for u in rows if u.get("active") is True),
+                "inactive": sum(1 for u in rows if u.get("status") == "inactive"),
+                "pending": sum(1 for u in rows if u.get("status") == "pending"),
+                "unknown": sum(1 for u in rows if u.get("active") is None),
+                "period": data.get("period", ""),
+                "workspace": data.get("workspace", ""),
+                "capturedAt": data.get("captured", ""),
+                "sourceUrl": data.get("source_url", ""),
+                "rows": rows,
+            }
+        except (ValueError, OSError):
+            pass
+
+    users_csv = out / "users.csv"
+    if users_csv.is_file():
+        found.append({"name": users_csv.name, "kind": "userscsv",
+                      "bytes": users_csv.stat().st_size})
 
     shots = sorted(out.glob("*.png"))
     if shots:
@@ -213,9 +257,10 @@ def health():
 def capabilities():
     """What the page is allowed to run for real. The UI reads this on load."""
     return jsonify({
-        "live": [{"system": "Workato", "controlId": "CM-02",
-                  "control": "Change management",
-                  "produces": ["Excel workbook", "screenshot manifest", "screenshots"]}],
+        "live": [{"system": sys_.title(), "controlId": cid.upper(),
+                  "control": c["control"], "scope": c["scope"],
+                  "produces": c["produces"]}
+                 for (sys_, cid), c in CAPTURES.items()],
         "note": "Every other system and control is a prototype simulation.",
     })
 
@@ -290,27 +335,29 @@ def prepare():
     workspace = str(body.get("workspace", "")).strip()
     project = str(body.get("project", "")).strip() or "all"
 
-    # Reject an unknown project here rather than let the capture sign in first and
-    # fail afterwards - and so a typo can never widen the scope by falling back to
-    # capturing everything.
-    known = {p.lower() for p in _projects()}
-    if project.lower() not in ("all", "*") and not all(
-            p.strip().lower() in known for p in project.split(",") if p.strip()):
-        return jsonify({
-            "error": "unknown_project",
-            "message": f"No project called {project!r}.",
-            "projects": _projects(),
-        }), 400
-
-    if not workspace:
-        workspace = _workspaces(system.lower())[1]
-
-    if (system.lower(), control_id.lower()) not in SUPPORTED:
+    capture = CAPTURES.get((system.lower(), control_id.lower()))
+    if capture is None:
+        wired = ", ".join(f"{s.title()}/{c.upper()}" for s, c in CAPTURES)
         return jsonify({
             "error": "not_wired",
             "message": f"{system or 'This system'} / {control_id or 'this control'} "
-                       f"has no capture behind it. Only Workato / CM-02 does.",
+                       f"has no capture behind it. Wired: {wired}.",
         }), 415
+
+    # Reject an unknown project here rather than let the capture sign in first and
+    # fail afterwards - and so a typo can never widen the scope by falling back to
+    # capturing everything.
+    if "project" in capture["scope"] and project.lower() not in ("all", "*"):
+        known = {p.lower() for p in _projects()}
+        if not all(p.strip().lower() in known for p in project.split(",") if p.strip()):
+            return jsonify({
+                "error": "unknown_project",
+                "message": f"No project called {project!r}.",
+                "projects": _projects(),
+            }), 400
+
+    if not workspace:
+        workspace = _workspaces(system.lower())[1]
 
     with _lock:
         if _active:
@@ -333,20 +380,26 @@ def prepare():
         "status": "running", "phase": "starting", "phaseDetail": "",
         "startedAt": _now(), "finishedAt": None, "exitCode": None, "error": None,
         "screenshots": 0, "warnings": [], "artifacts": [], "log": [], "pid": None,
+        "users": None,
     }
     _jobs[job_id] = job
 
     cmd = [
-        "python3", str(APP_ROOT / "workato_sox_capture.py"),
-        "--month", month,
+        "python3", str(APP_ROOT / capture["script"]),
         "--out", str(out),
         "--profile", str(PROFILE_DIR),
         "--no-pause",
         "--env", system.lower(),
         "--workspace", workspace,
-        "--project", project,
         "--settle", os.environ.get("CAPTURE_SETTLE", "4.0"),
     ]
+    # Each capture takes the scope that means something to it. The change-management
+    # run is monthly and per-project; the access review is a point-in-time listing
+    # labelled with the review period.
+    if "project" in capture["scope"]:
+        cmd += ["--month", month, "--project", project]
+    if "period" in capture["scope"]:
+        cmd += ["--period", period]
     try:
         env_cfg = environments.find(system)
     except environments.ConfigError as exc:

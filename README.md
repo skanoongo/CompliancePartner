@@ -1,16 +1,22 @@
 # Compliance Partner
 
 A website and a capture runner, in Docker. The site is the Compliance Partner
-prototype; behind one of its buttons is a real SOX evidence run.
+prototype; behind two of its buttons are real SOX evidence runs.
 
 ```
-Workato  →  Change management (CM-02)  →  Prepare
+Workato  →  Change management (CM-02)   →  Prepare
+Workato  →  User access review (UA-04)  →  Prepare
 ```
 
-Pressing that signs in to Workato, walks every in-scope recipe folder and version
-history, takes a whole-screen screenshot of each one, and builds an Excel workbook
-from what it saw. The page shows the run as it happens and hands back the workbook,
-the screenshots and a manifest.
+**Change management** signs in to Workato, walks every in-scope recipe folder and
+version history, screenshots each one, and builds an Excel workbook from what it saw.
+
+**User access review** opens the workspace's collaborator listing and reads who has
+access: name, email, role and the status exactly as the page showed it, split into
+active, inactive/suspended and pending. The listing appears on the page itself, and
+downloads as `users.csv`, `users.json` and a workbook with a tab per bucket.
+
+Both show the run as it happens and both are evidenced by whole-screen screenshots.
 
 Every other system and control on the page is still a simulation, and says so. That
 line is deliberate: a compliance tool that looks the same whether or not it touched
@@ -35,6 +41,26 @@ later runs start straight away.
 
 A full run takes roughly 20-40 minutes and produces ~30 screenshots; a single
 project is proportionally quicker.
+
+### User access review, and what "active" means
+
+Workato has no single active/inactive flag on a collaborator. It shows a state per
+row - active, pending, suspended, deactivated - worded differently by plan and page.
+So the capture records the **raw status exactly as displayed** and derives a verdict
+from it separately. Both are in every output.
+
+A status it does not recognise is marked `unknown` and raised as a warning. It is
+never assumed inactive, because assuming inactive is what hides live access from a
+reviewer - the one error a user access review must not make.
+
+The listing is **point-in-time**: Workato publishes no historical roster, so a
+review "for Q3 FY26" is a current snapshot labelled with that period and evidenced
+by the timestamp in each screenshot. The workbook says so on its face. The period
+comes from the Period selector at the top of the page.
+
+If no collaborator page can be opened, or the page opens but no rows parse, the run
+says so loudly and produces no user list. An empty list is never reported as "this
+workspace has no users".
 
 ### Workspace and Project
 
@@ -80,7 +106,8 @@ open http://cw_CompliancePartnercore.internal.coreweave.com/
 | `web/html/index.html` | the Compliance Partner page |
 | `web/html/live-capture.js` | replaces the simulated Prepare with a real run, for Workato/CM-02 only |
 | `runner/` | the capture image: virtual desktop, browser, capture script, job API |
-| `runner/workato_sox_capture.py` | the capture itself - runs on macOS, Linux and Windows |
+| `runner/workato_sox_capture.py` | change-management capture, and the shared browser/screen layer |
+| `runner/workato_uar_capture.py` | user access review: collaborator listing + evidence |
 | `runner/app.py` | the job API the page talks to |
 | `runner/entrypoint.sh` | builds the virtual desktop the capture photographs |
 | `docs/ARCHITECTURE.md` | why the runner carries a whole desktop, and how the pieces fit |
@@ -110,6 +137,9 @@ docker compose run --rm runner capture --project "2. CPQ" --workspace "CW Agenti
 
 # what projects are there?
 docker compose run --rm runner capture --list-projects
+
+# the user access review
+docker compose run --rm runner users --period "Q3 FY26" --workspace Production
 
 # screenshots and manifest only, no workbook
 docker compose run --rm runner capture --capture-only
