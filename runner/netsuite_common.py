@@ -36,8 +36,11 @@ LOGIN_URL = "https://system.netsuite.com/pages/customerlogin.jsp?country=US"
 
 # Pages that mean "not signed in yet", even though they render fine.
 LOGIN_MARKERS = ("customerlogin.jsp", "/pages/login", "login.nl", "/idp/", "saml")
-# The role picker - signed in, but not yet anywhere useful.
-ROLE_MARKERS = ("changerole", "rolelist", "/app/login/secure/changerole")
+# The role picker - signed in, but not yet anywhere useful. NetSuite spells this
+# "chooserole" on the way in and "changerole" once inside; matching only the
+# latter meant a successful sign-in was reported as "2FA needed" and the account
+# warning never fired.
+ROLE_MARKERS = ("chooserole", "changerole", "rolelist", "setuprole")
 
 EMAIL_SELECTORS = (
     "input#userName", "input[name='email']", "input#email",
