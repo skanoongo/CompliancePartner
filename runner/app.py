@@ -57,6 +57,18 @@ CAPTURES = {
         "scope": ["workspace", "period"],
         "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
     },
+    ("netsuite", "ua-04"): {
+        "script": "netsuite_uar_capture.py",
+        "control": "User access review",
+        "scope": ["period"],
+        "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
+    },
+    ("netsuite", "cm-02"): {
+        "script": "netsuite_sox_capture.py",
+        "control": "Change management",
+        "scope": ["period", "area"],
+        "produces": ["Excel workbook", "changes.csv", "screenshot manifest", "screenshots"],
+    },
 }
 
 app = Flask(__name__)
@@ -557,12 +569,18 @@ def prepare():
     cmd = [
         "python3", str(APP_ROOT / capture["script"]),
         "--out", str(out),
-        "--profile", str(PROFILE_DIR),
+        # A profile per system: a shared one would mean two signed-in sessions in
+        # the same browser, and a capture landing in the wrong system's tab.
+        "--profile", str(PROFILE_DIR if system.lower() == "workato"
+                         else DATA_DIR / f"{system.lower()}-profile"),
         "--no-pause",
         "--env", system.lower(),
-        "--workspace", workspace,
         "--settle", os.environ.get("CAPTURE_SETTLE", "4.0"),
     ]
+    # A workspace is a Workato concept. NetSuite is scoped by account instead,
+    # which the capture reads from config, so passing it here would be a lie.
+    if "workspace" in capture["scope"]:
+        cmd += ["--workspace", workspace]
     # Each capture takes the scope that means something to it. The change-management
     # run is monthly and per-project; the access review is a point-in-time listing
     # labelled with the review period.
@@ -570,6 +588,8 @@ def prepare():
         cmd += ["--month", month, "--project", project]
     if "period" in capture["scope"]:
         cmd += ["--period", period]
+    if "area" in capture["scope"]:
+        cmd += ["--area", str(body.get("area", "")).strip() or "all"]
     try:
         env_cfg = environments.find(system)
     except environments.ConfigError as exc:

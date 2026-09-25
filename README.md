@@ -4,8 +4,10 @@ A website and a capture runner, in Docker. The site is the Compliance Partner
 prototype; behind two of its buttons are real SOX evidence runs.
 
 ```
-Workato  →  Change management (CM-02)   →  Prepare
-Workato  →  User access review (UA-04)  →  Prepare
+Workato   →  Change management (CM-02)   →  Prepare
+Workato   →  User access review (UA-04)  →  Prepare
+NetSuite  →  User access review (UA-04)  →  Prepare
+NetSuite  →  Change management (CM-02)   →  Prepare
 ```
 
 **Change management** signs in to Workato, walks every in-scope recipe folder and
@@ -16,7 +18,20 @@ access: name, email, role and the status exactly as the page showed it, split in
 active, inactive/suspended and pending. The listing appears on the page itself, and
 downloads as `users.csv`, `users.json` and a workbook with a tab per bucket.
 
-Both show the run as it happens and both are evidenced by whole-screen screenshots.
+**NetSuite user access review** reads Manage Users, Employees and Roles from the
+configured account and records every user-role pairing with the access columns
+NetSuite shows. Access in NetSuite is granted per user-ROLE, so one person appears on
+several rows; the workbook reports both the rows (the unit of review) and the
+distinct-people count (for reconciling against HR).
+
+**NetSuite change management** walks the customization lists - scripts, deployments,
+workflows, custom record types, fields and forms - and records the population and the
+columns NetSuite shows for each. It deliberately does **not** claim to be an approval
+trail: NetSuite keeps System Notes one record at a time, and approvals live in the
+ticketing system the change was raised in. Matching population to approved changes
+stays a human step, and the workbook says so on its Summary tab.
+
+Every run shows progress as it happens and is evidenced by whole-screen screenshots.
 
 Every other system and control on the page is still a simulation, and says so. That
 line is deliberate: a compliance tool that looks the same whether or not it touched
@@ -77,6 +92,24 @@ the sign-in.
 **Project** narrows the capture to one area. Only the projects captured get a tab in
 the workbook: an out-of-scope project has no sheet at all rather than an empty one,
 so a scoped run cannot be misread as "nothing changed" everywhere else.
+
+### NetSuite specifics
+
+Three things differ from Workato and each one breaks a naive port, so
+`netsuite_common.py` handles them:
+
+- **Sign-in and the app are on different hosts.** You authenticate at
+  `system.netsuite.com` and end up on `<account>.app.netsuite.com`. Every capture
+  re-checks the account host on each screenshot, because evidence from the wrong
+  account looks entirely normal.
+- **A multi-role user lands on a role picker**, which looks signed in and is not yet
+  usable. The capture detects it and asks for a role to be chosen.
+- **Lists live in iframes and paginate.** Reading the outer document finds nothing,
+  so extraction runs against every frame and keeps the richest table.
+
+**2FA.** NetSuite pushes most administrator roles through it, and nothing can automate
+that. Form sign-in is attempted; when it does not land, the run pauses and asks a
+person to finish in the browser session — the same fallback as Workato.
 
 ## Sign-in (Okta)
 
@@ -143,6 +176,9 @@ open http://cw_CompliancePartnercore.internal.coreweave.com/
 | `runner/` | the capture image: virtual desktop, browser, capture script, job API |
 | `runner/workato_sox_capture.py` | change-management capture, and the shared browser/screen layer |
 | `runner/workato_uar_capture.py` | user access review: collaborator listing + evidence |
+| `runner/netsuite_common.py` | NetSuite sign-in, account checks, iframe list reading |
+| `runner/netsuite_uar_capture.py` | NetSuite user + role listing |
+| `runner/netsuite_sox_capture.py` | NetSuite customization change population |
 | `runner/app.py` | the job API the page talks to |
 | `runner/auth.py` | Okta OIDC sign-in, sessions, and SOX system entitlements |
 | `web/html/login.html` | sign-in page |
@@ -178,6 +214,11 @@ docker compose run --rm runner capture --list-projects
 
 # the user access review
 docker compose run --rm runner users --period "Q3 FY26" --workspace Production
+
+# NetSuite
+docker compose run --rm runner ns-users   --period "Q3 FY26"
+docker compose run --rm runner ns-changes --period "Q3 FY26" --area scripts,workflows
+docker compose run --rm runner ns-changes --list-areas
 
 # screenshots and manifest only, no workbook
 docker compose run --rm runner capture --capture-only

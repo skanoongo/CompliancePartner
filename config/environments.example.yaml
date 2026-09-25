@@ -54,11 +54,20 @@ environments:
   # ---------------------------------------------------------------- NetSuite
   netsuite:
     name: NetSuite
-    enabled: false
+    enabled: true
+    # Sign-in happens here; the application itself lives on the account host,
+    # which is derived from account_id below (7258820_SB1 ->
+    # https://7258820-sb1.app.netsuite.com). The capture checks it landed on the
+    # right account, because evidence from the wrong one looks entirely normal.
     base_url: https://system.netsuite.com
-    login: interactive
+    login_url: https://system.netsuite.com/pages/customerlogin.jsp?country=US
+    account_id: 7258820_SB1
+    login: form
     username: someone@coreweave.com
     password: ${NETSUITE_PASSWORD}
+    # NetSuite pushes most administrator roles through 2FA, which nothing can
+    # automate. The run then pauses and asks a person to finish in the browser
+    # session - the same fallback the Workato captures use.
 
   # ----------------------------------------------------------------- Workday
   workday:

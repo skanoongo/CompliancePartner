@@ -94,6 +94,20 @@ case "${1:-serve}" in
         exec python3 /app/workato_uar_capture.py \
             --profile "$CAPTURE_DATA_DIR/browser-profile" "$@"
         ;;
+    ns-users)
+        #   docker compose run --rm runner ns-users --period "Q3 FY26"
+        start_desktop
+        shift
+        exec python3 /app/netsuite_uar_capture.py \
+            --profile "$CAPTURE_DATA_DIR/netsuite-profile" "$@"
+        ;;
+    ns-changes)
+        #   docker compose run --rm runner ns-changes --area scripts,workflows
+        start_desktop
+        shift
+        exec python3 /app/netsuite_sox_capture.py \
+            --profile "$CAPTURE_DATA_DIR/netsuite-profile" "$@"
+        ;;
     shell)
         start_desktop
         exec bash
