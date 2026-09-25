@@ -24,8 +24,8 @@ also reports the distinct people count, which is what a reviewer signs off again
 
 Usage
 -----
-  python3 netsuite_uar_capture.py --period "Q3 FY26"
-  python3 netsuite_uar_capture.py --account 7258820_SB1 --out ./ns_uar
+  python3 -m netsuite.uar_capture --period "Q3 FY26"
+  python3 -m netsuite.uar_capture --account 7258820_SB1 --out ./ns_uar
 """
 
 import argparse
@@ -41,11 +41,17 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from playwright.sync_api import sync_playwright
 
-from workato_sox_capture import (
-    PX_PER_ROW, launch_browser, log, now_stamp, phase, slug, workbook_copy,
+from core.platform import (
+    PX_PER_ROW,
+    launch_browser,
+    log,
+    now_stamp,
+    phase,
+    slug,
+    workbook_copy,
 )
-import environments
-import netsuite_common as ns
+from core import environments
+from netsuite import common as ns
 
 # Where users live. Manage Users is the access list; the employee list is the
 # fallback, and carries the inactive flag rather than login access.

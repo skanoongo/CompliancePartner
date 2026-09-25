@@ -22,7 +22,7 @@ Two containers. One serves a page, one runs a browser and photographs it.
                     │           ├── xclock  (top 28px strip)      │
                     │           └── Chromium (below the strip)    │
                     │                                             │
-                    │  workato_sox_capture.py                     │
+                    │  core/ + workato/ + netsuite/               │
                     │  /data  profile + runs (volume)             │
                     └─────────────────────────────────────────────┘
 ```

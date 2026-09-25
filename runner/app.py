@@ -2,14 +2,13 @@
 """
 Compliance Partner - capture runner API.
 
-Turns the "Prepare" button in the Compliance Partner web app into a real run of
-workato_sox_capture.py, and reports what that run is doing while it does it.
+Turns the "Prepare" button in the Compliance Partner web app into a real capture,
+and reports what that run is doing while it does it.
 
-Only one control is wired to a real capture today:
-
-    system "Workato" + control "CM-02" (Change management)
-
-Everything else answers 415 with a reason, and the web app falls back to its
+Captures live in one package per system - workato/, netsuite/ - over the shared
+platform in core/. CAPTURES below is the only place that maps a (system, control)
+to the module that backs it; a pair absent from it has no capture, and
+/api/prepare answers 415 with a reason, and the web app falls back to its
 prototype simulation for those. That boundary is deliberate: the page should never
 imply it collected real evidence when it did not.
 
@@ -32,8 +31,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
 
-import auth
-import environments
+from core import auth, environments
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("CAPTURE_DATA_DIR", "/data"))
@@ -46,25 +44,25 @@ LOG_TAIL_LINES = 400
 # real capture, and /api/prepare refuses it rather than let the page imply one ran.
 CAPTURES = {
     ("workato", "cm-02"): {
-        "script": "workato_sox_capture.py",
+        "module": "workato.sox_capture",
         "control": "Change management",
         "scope": ["workspace", "project"],
         "produces": ["Excel workbook", "screenshot manifest", "screenshots"],
     },
     ("workato", "ua-04"): {
-        "script": "workato_uar_capture.py",
+        "module": "workato.uar_capture",
         "control": "User access review",
         "scope": ["workspace", "period"],
         "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
     },
     ("netsuite", "ua-04"): {
-        "script": "netsuite_uar_capture.py",
+        "module": "netsuite.uar_capture",
         "control": "User access review",
         "scope": ["period"],
         "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
     },
     ("netsuite", "cm-02"): {
-        "script": "netsuite_sox_capture.py",
+        "module": "netsuite.sox_capture",
         "control": "Change management",
         "scope": ["period", "area"],
         "produces": ["Excel workbook", "changes.csv", "screenshot manifest", "screenshots"],
@@ -210,7 +208,8 @@ def _run(job, cmd, secrets=()):
             stdin=subprocess.DEVNULL,     # no TTY: the script takes its non-interactive path
             text=True,
             bufsize=1,
-            env={**os.environ, "CAPTURE_SESSION_URL": SESSION_URL},
+            env={**os.environ, "CAPTURE_SESSION_URL": SESSION_URL,
+                 "PYTHONPATH": str(APP_ROOT)},
         )
         job["pid"] = proc.pid
         logfile = _job_dir(job["id"]) / "run.log"
@@ -435,9 +434,9 @@ def capabilities():
 
 def _projects():
     """Projects the capture script knows about - one per workbook tab."""
-    import workato_sox_capture
+    from workato import sox_capture
 
-    return workato_sox_capture.project_names()
+    return sox_capture.project_names()
 
 
 def _workspaces(env_key="workato"):
@@ -567,7 +566,7 @@ def prepare():
     _jobs[job_id] = job
 
     cmd = [
-        "python3", str(APP_ROOT / capture["script"]),
+        "python3", "-m", capture["module"],
         "--out", str(out),
         # A profile per system: a shared one would mean two signed-in sessions in
         # the same browser, and a capture landing in the wrong system's tab.

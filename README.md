@@ -173,19 +173,47 @@ open http://cw_CompliancePartnercore.internal.coreweave.com/
 | `web/` | nginx image serving the site and proxying the API and browser session |
 | `web/html/index.html` | the Compliance Partner page |
 | `web/html/live-capture.js` | replaces the simulated Prepare with a real run, for Workato/CM-02 only |
-| `runner/` | the capture image: virtual desktop, browser, capture script, job API |
-| `runner/workato_sox_capture.py` | change-management capture, and the shared browser/screen layer |
-| `runner/workato_uar_capture.py` | user access review: collaborator listing + evidence |
-| `runner/netsuite_common.py` | NetSuite sign-in, account checks, iframe list reading |
-| `runner/netsuite_uar_capture.py` | NetSuite user + role listing |
-| `runner/netsuite_sox_capture.py` | NetSuite customization change population |
+| `runner/` | the capture image: virtual desktop, browser, captures, job API |
 | `runner/app.py` | the job API the page talks to |
-| `runner/auth.py` | Okta OIDC sign-in, sessions, and SOX system entitlements |
+| `runner/core/platform.py` | shared capture platform: logging, phases, screen capture, browser |
+| `runner/core/auth.py` | Okta OIDC sign-in, sessions, SOX system entitlements |
+| `runner/core/environments.py` | per-system credentials and config loading |
+| `runner/workato/sox_capture.py` | Workato change management (CM-02) |
+| `runner/workato/uar_capture.py` | Workato user access review (UA-04) |
+| `runner/netsuite/common.py` | NetSuite sign-in, account checks, iframe list reading |
+| `runner/netsuite/uar_capture.py` | NetSuite user access review (UA-04) |
+| `runner/netsuite/sox_capture.py` | NetSuite change management (CM-02) |
 | `web/html/login.html` | sign-in page |
 | `web/html/choose.html` | which SOX system am I working on |
 | `runner/entrypoint.sh` | builds the virtual desktop the capture photographs |
 | `docs/ARCHITECTURE.md` | why the runner carries a whole desktop, and how the pieces fit |
 | `docs/RUNBOOK.md` | running a monthly review, and what to do when one goes wrong |
+
+### How the runner is laid out
+
+One package per system over a shared platform:
+
+```
+runner/
+├── app.py            the job API; CAPTURES maps (system, control) -> module
+├── core/             shared by every system
+│   ├── platform.py   logging, phases, screen capture, browser launch
+│   ├── auth.py       Okta sign-in, sessions, entitlements
+│   └── environments.py
+├── workato/          sox_capture.py (CM-02), uar_capture.py (UA-04)
+└── netsuite/         common.py, uar_capture.py (UA-04), sox_capture.py (CM-02)
+```
+
+A system package depends on `core` and never on a sibling. That direction is the
+point of the split: the screen layer used to live inside the Workato change-
+management script, so the NetSuite captures imported from Workato in order to take
+a screenshot — a dependency that said the opposite of what the code does. Adding a
+third system now means adding a package, not editing an existing system's file.
+
+Captures are invoked as modules (`python3 -m netsuite.uar_capture`) with
+`PYTHONPATH=/app`, because the job subprocess runs with its own run directory as
+cwd — a path-based invocation would put the script's folder on `sys.path` and the
+package imports would not resolve.
 
 ## Why the runner carries a whole desktop
 

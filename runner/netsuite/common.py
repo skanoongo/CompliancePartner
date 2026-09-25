@@ -27,9 +27,15 @@ a person in the browser session, exactly as the Workato captures do.
 import re
 import time
 
-from workato_sox_capture import (
-    APP_NAME, SCROLL_BY_JS, SCROLL_JS,
-    activate_app, grab_screen, log, now_stamp, slug,
+from core.platform import (
+    APP_NAME,
+    SCROLL_BY_JS,
+    SCROLL_JS,
+    activate_app,
+    grab_screen,
+    log,
+    now_stamp,
+    slug,
 )
 
 LOGIN_URL = "https://system.netsuite.com/pages/customerlogin.jsp?country=US"
@@ -223,7 +229,7 @@ def sign_in(ctx, page, account_id, username, password, mode, session_url="",
             pass
 
         if time.time() - last > 15:
-            from workato_sox_capture import phase
+            from core.platform import phase
 
             phase("awaiting_login", session_url)
             if on_role_picker:

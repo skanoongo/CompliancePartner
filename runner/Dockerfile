@@ -45,15 +45,19 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium \
     && rm -rf /root/.cache
 
-COPY workato_sox_capture.py workato_uar_capture.py \
-     netsuite_common.py netsuite_uar_capture.py netsuite_sox_capture.py \
-     app.py environments.py auth.py entrypoint.sh ./
-RUN chmod +x entrypoint.sh workato_sox_capture.py workato_uar_capture.py \
-             netsuite_uar_capture.py netsuite_sox_capture.py
+# One package per system over the shared platform in core/, so a capture is
+# invoked as a module (python3 -m netsuite.uar_capture) and never reaches across
+# into a sibling system's code.
+COPY core/ ./core/
+COPY workato/ ./workato/
+COPY netsuite/ ./netsuite/
+COPY app.py entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
 # Credentials are MOUNTED at /config, never copied in: an image layer is forever,
 # and it travels to whatever registry the image is pushed to.
-ENV CAPTURE_CONFIG=/config/environments.yaml \
+ENV PYTHONPATH=/app \
+    CAPTURE_CONFIG=/config/environments.yaml \
     AUTH_CONFIG=/config/auth.yaml
 
 # Browser profile and run output live here. Mount a volume so an SSO login and the

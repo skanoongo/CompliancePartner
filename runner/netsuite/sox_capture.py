@@ -25,8 +25,8 @@ run "for Q3 FY26" evidences the customizations as they stood when it ran.
 
 Usage
 -----
-  python3 netsuite_sox_capture.py --period "Q3 FY26"
-  python3 netsuite_sox_capture.py --area scripts,workflows
+  python3 -m netsuite.sox_capture --period "Q3 FY26"
+  python3 -m netsuite.sox_capture --area scripts,workflows
 """
 
 import argparse
@@ -42,11 +42,17 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from playwright.sync_api import sync_playwright
 
-from workato_sox_capture import (
-    PX_PER_ROW, launch_browser, log, now_stamp, phase, slug, workbook_copy,
+from core.platform import (
+    PX_PER_ROW,
+    launch_browser,
+    log,
+    now_stamp,
+    phase,
+    slug,
+    workbook_copy,
 )
-import environments
-import netsuite_common as ns
+from core import environments
+from netsuite import common as ns
 
 # The customization areas a change review covers. Each becomes a workbook tab and
 # is selectable with --area.

@@ -76,14 +76,14 @@ case "${1:-serve}" in
     serve)
         start_desktop
         log "capture runner starting on :$PORT"
-        exec python3 /app/app.py
+        exec python3 app.py
         ;;
     capture)
         # Run the capture directly, no API. Everything after "capture" is passed
         # through, e.g. docker compose run --rm runner capture --month "May 2026"
         start_desktop
         shift
-        exec python3 /app/workato_sox_capture.py \
+        exec python3 -m workato.sox_capture \
             --profile "$CAPTURE_DATA_DIR/browser-profile" "$@"
         ;;
     users)
@@ -91,21 +91,21 @@ case "${1:-serve}" in
         #   docker compose run --rm runner users --period "Q3 FY26"
         start_desktop
         shift
-        exec python3 /app/workato_uar_capture.py \
+        exec python3 -m workato.uar_capture \
             --profile "$CAPTURE_DATA_DIR/browser-profile" "$@"
         ;;
     ns-users)
         #   docker compose run --rm runner ns-users --period "Q3 FY26"
         start_desktop
         shift
-        exec python3 /app/netsuite_uar_capture.py \
+        exec python3 -m netsuite.uar_capture \
             --profile "$CAPTURE_DATA_DIR/netsuite-profile" "$@"
         ;;
     ns-changes)
         #   docker compose run --rm runner ns-changes --area scripts,workflows
         start_desktop
         shift
-        exec python3 /app/netsuite_sox_capture.py \
+        exec python3 -m netsuite.sox_capture \
             --profile "$CAPTURE_DATA_DIR/netsuite-profile" "$@"
         ;;
     shell)

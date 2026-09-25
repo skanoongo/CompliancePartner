@@ -32,9 +32,9 @@ argument is used, and the workbook says so on its face.
 
 Usage
 -----
-  python3 workato_uar_capture.py --period "Q3 FY26"
-  python3 workato_uar_capture.py --period "Q3 FY26" --out ./uar_q3
-  python3 workato_uar_capture.py --capture-only      # no workbook
+  python3 -m workato.uar_capture --period "Q3 FY26"
+  python3 -m workato.uar_capture --period "Q3 FY26" --out ./uar_q3
+  python3 -m workato.uar_capture --capture-only      # no workbook
 """
 
 import argparse
@@ -52,12 +52,26 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from playwright.sync_api import sync_playwright
 
-from workato_sox_capture import (
-    APP_NAME, BASE, PX_PER_ROW, SCROLL_BY_JS, SCROLL_JS,
-    activate_app, ensure_workspace, grab_screen, interactive, launch_browser,
-    log, now_stamp, phase, slug, workbook_copy,
+from core.platform import (
+    APP_NAME,
+    PX_PER_ROW,
+    SCROLL_BY_JS,
+    SCROLL_JS,
+    activate_app,
+    grab_screen,
+    interactive,
+    launch_browser,
+    log,
+    now_stamp,
+    phase,
+    slug,
+    workbook_copy,
 )
-import environments
+from workato.sox_capture import (
+    BASE,
+    ensure_workspace,
+)
+from core import environments
 
 # Where collaborators live. Workato has moved this more than once and it differs by
 # plan, so every candidate is tried and the first one that actually renders a list
@@ -551,7 +565,7 @@ def run(args, out_dir):
 
         # Same sign-in path as the change-management capture, including the
         # configured credentials and the fallback to a person for SSO/MFA.
-        from workato_sox_capture import wait_for_login
+        from workato.sox_capture import wait_for_login
 
         page = wait_for_login(ctx, page, username=args.username,
                               password=args.password, mode=args.login)
