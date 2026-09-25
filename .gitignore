@@ -2,10 +2,19 @@
 .env
 
 # Live credentials for production systems. The .example file is the only one that
-# is ever committed. Do not remove these two lines.
+# is ever committed. Do not remove these lines.
 config/environments.yaml
 config/auth.yaml
 config/*.local.yaml
+
+# Private keys and certificates - M2M authentication material. A private key
+# pushed to a remote is not recoverable by deleting it; it means reissuing the
+# key and re-uploading the certificate to every system that trusts it.
+*.pem
+*.p12
+*.key
+*.pfx
+*.jks
 
 # Capture output: screenshots of a signed-in Workato session, and the workbooks
 # built from them. This is evidence for a specific review period - it belongs in

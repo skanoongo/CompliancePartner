@@ -70,6 +70,20 @@ environments:
     # account is never chosen, because that produces a workbook that looks right
     # and holds the wrong population. No match means a person picks it by hand.
     role: Administrator
+
+    # --- M2M (OAuth 2.0 client credentials) -----------------------------------
+    # For anything that talks to NetSuite's REST/SuiteQL APIs rather than driving
+    # the browser. The path is inside the CONTAINER: config/ is mounted read-only
+    # at /config, so a file dropped in config/ is here without a rebuild.
+    #
+    # The key must be PKCS#8 ("BEGIN PRIVATE KEY"). SuiteCloud rejects PKCS#1 with
+    # an error that does not mention the format.
+    private_key_path: /config/netsuite-m2m-private.pem
+    # Upload netsuite-m2m-cert.pem in NetSuite (Setup > Integration > OAuth 2.0
+    # Client Credentials (M2M) Setup); it hands back the id that goes here.
+    certificate_id: ""
+    # From the integration record with the Client Credentials grant.
+    client_id: ""
     # NetSuite pushes most administrator roles through 2FA, which nothing can
     # automate. Role selection IS automated (it is just a link); 2FA is not. The
     # run pauses for that and asks a person to finish in the browser session.
