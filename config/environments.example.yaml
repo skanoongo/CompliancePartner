@@ -79,6 +79,11 @@ environments:
     # The key must be PKCS#8 ("BEGIN PRIVATE KEY"). SuiteCloud rejects PKCS#1 with
     # an error that does not mention the format.
     private_key_path: /config/netsuite-m2m-private.pem
+    # Signing algorithm for the JWT assertion. NetSuite records this when the
+    # certificate is uploaded, and rejects any other with a bare
+    # {"error":"invalid_grant"} that names neither the algorithm nor the cause.
+    # This certificate was registered as PS256; RS256 fails against it.
+    assertion_alg: PS256
     # Upload netsuite-m2m-cert.pem in NetSuite (Setup > Integration > OAuth 2.0
     # Client Credentials (M2M) Setup); it hands back the id that goes here.
     certificate_id: ""
