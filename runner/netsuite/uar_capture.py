@@ -322,7 +322,7 @@ def run(args, out_dir):
         page.set_default_timeout(60000)
 
         page = ns.sign_in(ctx, page, args.account, args.username, args.password,
-                          args.login, args.session_url)
+                          args.login, args.session_url, role=args.role)
         if page is None:
             log("Sign-in did not complete. Exiting.")
             try:
@@ -350,11 +350,18 @@ def run(args, out_dir):
                     "evidence that the account has no users."],
             }, indent=2))
             ctx.close()
+            if cap.auth_lost:
+                raise SystemExit(
+                    "The NetSuite session was not valid: every list redirected back to a "
+                    "sign-in page.\nThis is NOT a permissions problem - the sign-in never "
+                    "completed, usually because a two-factor code is still outstanding.\n"
+                    "Open the browser session, finish signing in, and re-run.")
             raise SystemExit(
                 "No NetSuite user list could be read. Tried:\n  "
                 + "\n  ".join(f"{p} ({l})" for p, l in USER_PATHS)
-                + "\nUsually the signed-in role lacks permission to view Setup > Users/Roles. "
-                  "Open the browser session, switch to an administrator role, and re-run.")
+                + "\nThe session was valid, so the signed-in role most likely lacks "
+                  "permission for Setup > Users/Roles. Switch to an administrator role "
+                  "and re-run.")
 
         if not users:
             cap.warn("lists opened but no user rows could be read - check the screenshots; "
@@ -399,6 +406,9 @@ def main():
     ap.add_argument("--no-pause", action="store_true")
     ap.add_argument("--env", default="netsuite")
     ap.add_argument("--username", default="")
+    ap.add_argument("--role", default="",
+                    help="role to select on the NetSuite role picker, e.g. Administrator. "
+                         "Only chosen when it matches BOTH the role name and the account.")
     # Deliberately no --password: a password on the command line is visible to
     # every process on the box via `ps`.
     args = ap.parse_args()
@@ -408,6 +418,7 @@ def main():
 
     args.password = ""
     args.login = "interactive"
+    args.role = args.role or ""
     args.session_url = __import__("os").environ.get("CAPTURE_SESSION_URL", "")
     try:
         cfg = environments.find(args.env)
@@ -416,6 +427,7 @@ def main():
             args.password = cfg.get("password", "")
             args.login = cfg.get("login", "interactive")
             args.account = args.account or cfg.get("account_id", "")
+            args.role = args.role or cfg.get("role", "Administrator")
             log(f"Environment '{cfg['name']}': login={args.login}"
                 f"{', user=' + args.username if args.username else ''}"
                 f"{', password configured' if args.password else ', no password configured'}")

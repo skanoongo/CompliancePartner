@@ -65,9 +65,14 @@ environments:
     login: form
     username: someone@coreweave.com
     password: ${NETSUITE_PASSWORD}
+    # Role to pick on NetSuite's role picker. Selected only when a row matches
+    # BOTH this role AND account_id above - an Administrator role in a different
+    # account is never chosen, because that produces a workbook that looks right
+    # and holds the wrong population. No match means a person picks it by hand.
+    role: Administrator
     # NetSuite pushes most administrator roles through 2FA, which nothing can
-    # automate. The run then pauses and asks a person to finish in the browser
-    # session - the same fallback the Workato captures use.
+    # automate. Role selection IS automated (it is just a link); 2FA is not. The
+    # run pauses for that and asks a person to finish in the browser session.
 
   # ----------------------------------------------------------------- Workday
   workday:

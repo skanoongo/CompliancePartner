@@ -26,6 +26,7 @@ a person in the browser session, exactly as the Workato captures do.
 
 import re
 import time
+from urllib.parse import urljoin
 
 from core.platform import (
     APP_NAME,
@@ -40,8 +41,16 @@ from core.platform import (
 
 LOGIN_URL = "https://system.netsuite.com/pages/customerlogin.jsp?country=US"
 
-# Pages that mean "not signed in yet", even though they render fine.
-LOGIN_MARKERS = ("customerlogin.jsp", "/pages/login", "login.nl", "/idp/", "saml")
+# Pages that mean "not signed in yet", even though they render fine and sit on the
+# account's own host. loginchallenge/ is NetSuite's 2FA entry and enterpriselogin
+# is where it bounces an unauthenticated request - both used to satisfy
+# looks_logged_in(), so a run would announce "Signed in as Administrator", walk
+# every list, find nothing, and report it as a PERMISSIONS problem.
+LOGIN_MARKERS = (
+    "customerlogin.jsp", "/pages/login", "login.nl", "/idp/", "saml",
+    "loginchallenge", "enterpriselogin", "securityquestions", "twofactor",
+    "/app/login/secure/",
+)
 # The role picker - signed in, but not yet anywhere useful. NetSuite spells this
 # "chooserole" on the way in and "changerole" once inside; matching only the
 # latter meant a successful sign-in was reported as "2FA needed" and the account
@@ -106,6 +115,24 @@ def page_text(page):
         return ""
 
 
+CHALLENGE_MARKERS = ("loginchallenge", "securityquestions", "twofactor", "verifycode")
+
+
+def at_login_challenge(page):
+    """True on NetSuite's 2FA / security-challenge page.
+
+    Distinct from "not signed in": the password was accepted and NetSuite now
+    wants a second factor. Only a person can answer it, and saying so beats
+    reporting a permissions problem that does not exist.
+    """
+    url = page.url.lower()
+    if any(m in url for m in CHALLENGE_MARKERS):
+        return True
+    txt = page_text(page).lower()
+    return ("verification code" in txt or "security code" in txt
+            or "two-factor" in txt or "authenticator app" in txt)
+
+
 def at_role_picker(page):
     url = page.url.lower()
     if any(m in url for m in ROLE_MARKERS):
@@ -129,6 +156,189 @@ def looks_logged_in(page, expect_host):
     if at_role_picker(page):
         return False
     return expect_host.lower() in url
+
+
+# Every role offered on the picker, with the row it sits in. The row is what
+# carries the ACCOUNT, and the account is the part that must not be got wrong.
+ROLE_LINKS_JS = r"""
+() => {
+  const out = [];
+  const seen = new Set();
+  document.querySelectorAll('a[href], input[type=submit], button').forEach(el => {
+    const row = el.closest('tr');
+    const rowText = (row ? row.innerText : (el.parentElement || el).innerText || '').trim();
+    if (!rowText) return;
+    const label = (el.innerText || el.value || '').trim();
+    const key = rowText + '|' + label;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      label: label,
+      href: el.getAttribute('href') || '',
+      rowText: rowText.replace(/\s+/g, ' '),
+      cells: row ? Array.from(row.querySelectorAll('td,th'))
+                        .map(c => (c.innerText || '').trim()).filter(Boolean) : [],
+    });
+  });
+  return out;
+}
+"""
+
+
+def _norm(s):
+    """Collapse to lowercase alphanumerics so 7258820_SB1 == 7258820-sb1 == 7258820 SB1."""
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+
+ACCOUNT_ACTIONS = ("choose account", "choose", "continue", "select account", "select")
+
+
+def account_candidates(entries, account_id):
+    """Rows on the ACCOUNT step that identify the account under review.
+
+    NetSuite's picker is two steps for a user with roles in more than one account:
+    "(SB1) Coreweave, Inc. SANDBOX  [Choose account]" first, roles second. Those
+    rows name the account by its sandbox suffix only - no account number - so the
+    strict full-id match never fires and a looser one is needed.
+
+    The looser match is only trusted when exactly ONE row matches, because the
+    whole point is telling SB1 from SB3.
+    """
+    tokens = [t for t in re.split(r"[^A-Za-z0-9]+", str(account_id)) if t]
+    if not tokens:
+        return []
+    full = _norm(account_id)
+    suffix = _norm(tokens[-1])          # e.g. "sb1"
+
+    strict, loose = [], []
+    for e in entries:
+        row = _norm(e["rowText"])
+        if not row:
+            continue
+        actionable = any(a in e["rowText"].lower() or a in e["label"].lower()
+                         for a in ACCOUNT_ACTIONS)
+        if not actionable:
+            continue
+        if full in row or all(_norm(t) in row for t in tokens):
+            strict.append(e)
+        elif suffix and len(suffix) >= 2 and suffix in row:
+            loose.append(e)
+
+    if strict:
+        return strict
+    # Ambiguous suffix matches are worse than none: refuse rather than guess.
+    return loose if len(loose) == 1 else []
+
+
+def role_candidates(entries, account_id, role_name):
+    """Rows that match BOTH the account under review and the wanted role.
+
+    Both halves are required. Matching on the role alone would happily pick
+    "Administrator" in a different account - which is exactly the mistake that
+    produces a clean-looking workbook full of the wrong population.
+    """
+    want_acct = _norm(account_id)
+    want_role = _norm(role_name)
+    # 7258820_SB1 -> also match a row that says just "SB1" alongside the number
+    acct_parts = [p for p in re.split(r"[^A-Za-z0-9]+", str(account_id)) if p]
+
+    hits = []
+    for e in entries:
+        row = _norm(e["rowText"])
+        if not row:
+            continue
+        account_ok = want_acct in row or all(_norm(p) in row for p in acct_parts)
+        role_ok = want_role in row or want_role in _norm(e["label"])
+        if account_ok and role_ok:
+            hits.append(e)
+    return hits
+
+
+def _click(page, entry, settle):
+    """Follow a picker row - a link where there is one, otherwise the control."""
+    href = entry.get("href") or ""
+    if href and not href.lower().startswith(("javascript", "#")):
+        page.goto(urljoin(page.url, href), wait_until="domcontentloaded")
+    elif entry.get("label"):
+        page.get_by_text(entry["label"], exact=True).first.click()
+    else:
+        raise RuntimeError("nothing clickable on the matched row")
+    try:
+        page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        pass
+    time.sleep(settle)
+
+
+def choose_role(page, account_id, role_name, host, settle=3, max_steps=4):
+    """Walk NetSuite's picker to `role_name` in `account_id`. Returns (ok, message).
+
+    The picker is one step for a single-account user and two for everyone else -
+    "Choose account" first, roles second - so this loops rather than assuming a
+    flat list of roles.
+
+    It automates only the unambiguous case. Where nothing matches, or a suffix
+    match is ambiguous, or the result does not land on the account under review,
+    it does NOT guess: it returns False and the caller hands over to a person.
+    Picking the wrong row here is not a visible failure - it is a workbook that
+    looks entirely right and holds another account's population.
+    """
+    seen_rows = set()
+    for step in range(max_steps):
+        if looks_logged_in(page, host):
+            return True, f"already on {host}"
+        try:
+            entries = page.evaluate(ROLE_LINKS_JS)
+        except Exception as exc:
+            return False, f"could not read the picker ({type(exc).__name__})"
+        if not entries:
+            return False, "the picker listed nothing selectable"
+
+        # Role step first: it is the more specific match of the two.
+        hits = role_candidates(entries, account_id, role_name)
+        kind = "role"
+        if not hits:
+            hits = account_candidates(entries, account_id)
+            kind = "account"
+
+        if not hits:
+            if at_login_challenge(page):
+                return False, ("NetSuite is asking for a two-factor code - only a person "
+                               "can answer that")
+            offered = sorted({e["rowText"][:90] for e in entries if e["rowText"]})[:8]
+            return False, (f"nothing matching '{role_name}' in account {account_id}. "
+                           f"Offered: " + " / ".join(offered))
+
+        if len(hits) > 1:
+            log(f"  {len(hits)} {kind} rows match in {account_id}; taking the first")
+            for h in hits[:4]:
+                log(f"     - {h['rowText'][:100]}")
+
+        target = hits[0]
+        fingerprint = target["rowText"][:120]
+        if fingerprint in seen_rows:
+            return False, (f"the picker is not advancing - '{fingerprint[:70]}' was already "
+                           f"selected once")
+        seen_rows.add(fingerprint)
+
+        log(f"  selecting {kind}: {fingerprint[:100]}")
+        try:
+            _click(page, target, settle)
+        except Exception as exc:
+            return False, f"clicking the {kind} row failed ({type(exc).__name__}: {exc})"
+
+        for _ in range(8):
+            if looks_logged_in(page, host):
+                return True, f"selected {fingerprint[:80]}"
+            if at_login_challenge(page):
+                return False, (f"selected {fingerprint[:60]}, and NetSuite then asked for "
+                               f"a two-factor code - only a person can answer that")
+            if at_role_picker(page):
+                break          # next step of the picker
+            time.sleep(2)
+
+    return False, (f"still at {page.url} after {max_steps} picker steps, which is not "
+                   f"{host} - not continuing")
 
 
 def try_form_login(page, username, password):
@@ -166,7 +376,7 @@ def try_form_login(page, username, password):
 
 
 def sign_in(ctx, page, account_id, username, password, mode, session_url="",
-            timeout_s=900):
+            role="", timeout_s=900):
     """Get to a usable page on the right account. Returns the page, or None.
 
     Order matters: try the stored session first (NetSuite often keeps you signed
@@ -195,6 +405,13 @@ def sign_in(ctx, page, account_id, username, password, mode, session_url="",
             for _ in range(30):
                 if at_role_picker(page):
                     log("  signed in, and NetSuite is asking which ROLE to use")
+                    if role:
+                        ok, why = choose_role(page, account_id, role, host)
+                        if ok:
+                            log(f"  {why}")
+                            log(f"Signed in as {role} in {account_id}. At {page.url}")
+                            return page
+                        log(f"  !! could not pick the role automatically: {why}")
                     break
                 if looks_logged_in(page, host):
                     log(f"Signed in with the configured credentials. At {page.url}")
@@ -208,6 +425,7 @@ def sign_in(ctx, page, account_id, username, password, mode, session_url="",
     last = 0
     last_probe = time.time()
     warned_account = False
+    tried_role = False
     activate_app(APP_NAME)
     while time.time() - start < timeout_s:
         pages = [p for p in ctx.pages if not p.is_closed()]
@@ -222,11 +440,27 @@ def sign_in(ctx, page, account_id, username, password, mode, session_url="",
                 pass
 
         here = pages[-1]
-        on_role_picker = False
+        on_role_picker = on_challenge = False
         try:
             on_role_picker = at_role_picker(here)
+            on_challenge = at_login_challenge(here)
         except Exception:
             pass
+        # Any step a PERSON is part-way through. Re-navigating during one throws
+        # away their progress - it reset the role picker before, and a pending
+        # two-factor challenge after that.
+        mid_auth = on_role_picker or on_challenge
+
+        # The picker can also appear after a person completes 2FA. Try once more
+        # there, so the only thing left for a human is the part a human must do.
+        if on_role_picker and role and not tried_role:
+            tried_role = True
+            ok, why = choose_role(page if page in pages else here, account_id, role, host)
+            if ok:
+                log(f"  {why}")
+                return here
+            log(f"  !! could not pick the role automatically: {why}")
+            log("     pick it by hand in the browser session")
 
         if time.time() - last > 15:
             from core.platform import phase
@@ -243,6 +477,9 @@ def sign_in(ctx, page, account_id, username, password, mode, session_url="",
                     log(f"   ! the default role is NOT in {account_id} - check the account "
                         f"column before choosing")
                     warned_account = True
+            elif at_login_challenge(here):
+                log("Waiting: NetSuite wants a TWO-FACTOR code. Enter it in the browser "
+                    "session; the role is then selected automatically.")
             else:
                 log("Waiting for NetSuite sign-in (2FA or SSO may be required).")
             for p in pages:
@@ -255,7 +492,7 @@ def sign_in(ctx, page, account_id, username, password, mode, session_url="",
         # But NEVER while the role picker is up: that throws away a sign-in that has
         # already succeeded and drops the browser back at an empty login form, which
         # is exactly what it used to do.
-        if not on_role_picker and time.time() - last_probe > 20:
+        if not mid_auth and time.time() - last_probe > 20:
             last_probe = time.time()
             try:
                 here.goto(base, wait_until="domcontentloaded")
@@ -357,6 +594,7 @@ class NsCapture:
         self.seq = 0
         self.manifest = []
         self.warnings = []
+        self.auth_lost = False
 
     def warn(self, msg):
         log(f"  !! {msg}")
@@ -375,6 +613,13 @@ class NsCapture:
                 pass
             time.sleep(self.settle)
             if not looks_logged_in(self.page, self.host):
+                if any(m in self.page.url.lower() for m in LOGIN_MARKERS):
+                    # Bounced to a login page: the session is not established. Say
+                    # that, because the caller's fallback message blames permissions
+                    # and would send someone hunting a role problem that is not there.
+                    self.auth_lost = True
+                    log(f"    redirected to a sign-in page - the session is not valid")
+                    return False
                 if attempt < retries:
                     log(f"    landed on {self.page.url} - retrying")
                     continue

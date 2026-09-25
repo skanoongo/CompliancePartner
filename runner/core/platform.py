@@ -272,6 +272,33 @@ def enter_pressed():
 APP_NAME = "Chrom"  # substring match: Chromium / Google Chrome / Google Chrome for Testing
 
 
+def clear_profile_lock(profile_dir):
+    """Remove the singleton lock a killed Chromium leaves in its profile.
+
+    Chromium marks a profile in use with SingletonLock/Cookie/Socket and refuses
+    to start if they are present. A graceful exit clears them; a container
+    restart, a crash or a cancelled job does not - so the profile stays locked
+    and EVERY later run dies with "the profile appears to be in use by another
+    Chromium process", which reads like a concurrency bug rather than debris.
+
+    Safe to do unconditionally here: the job API runs one capture at a time, so
+    nothing else can be holding this profile when a launch is starting.
+    """
+    removed = []
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        stale = Path(profile_dir) / name
+        try:
+            if stale.exists() or stale.is_symlink():
+                stale.unlink()
+                removed.append(name)
+        except OSError:
+            pass
+    if removed:
+        log(f"cleared a stale browser profile lock ({', '.join(removed)}) - a previous "
+            f"run did not shut down cleanly")
+    return removed
+
+
 def launch_browser(p, profile, browser="chromium"):
     """Open the persistent browser, sized to leave the clock strip uncovered.
 
@@ -280,6 +307,7 @@ def launch_browser(p, profile, browser="chromium"):
     """
     profile_dir = Path(profile).expanduser()
     profile_dir.mkdir(parents=True, exist_ok=True)
+    clear_profile_lock(profile_dir)
     sw, sh = screen_size()
     kwargs = dict(
         user_data_dir=str(profile_dir),
