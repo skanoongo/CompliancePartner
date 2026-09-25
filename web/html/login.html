@@ -54,13 +54,28 @@ async function render() {
   }
 
   if (!cfg.enabled) {
+    // Name the step that is actually outstanding.
+    const todo = {
+      no_config: `<p class="mono">cp config/auth.example.yaml config/auth.yaml</p>
+                  <p>Then fill in the Okta application details and set
+                  <code>enabled: true</code>.</p>`,
+      incomplete: `<p><strong>${esc(cfg.configPath || 'config/auth.yaml')}</strong> exists but
+                   still needs: <code>${(cfg.missing || []).map(esc).join('</code>, <code>')}</code></p>
+                   <p>Get these from the Okta application (Applications &rarr; your app
+                   &rarr; General). Then set <code>enabled: true</code> and restart the
+                   runner.</p>`,
+      disabled: `<p>Everything is configured &mdash; sign-in is just switched off.
+                 Set <code>enabled: true</code> in
+                 <strong>${esc(cfg.configPath || 'config/auth.yaml')}</strong> and restart
+                 the runner.</p>`
+    }[cfg.step] || `<p>Set <code>enabled: true</code> in the auth config.</p>`;
+
     $('state').innerHTML = `<div class="notice warn">
       <strong>Sign-in is turned off</strong>
       <p>This site currently has <strong>no authentication</strong>. Anyone who can reach
       it can start captures and open a browser session that is already signed in to the
       systems under review.</p>
-      <p class="mono">cp config/auth.example.yaml config/auth.yaml</p>
-      <p>Set <code>enabled: true</code> and fill in the Okta application details.</p>
+      ${todo}
       </div>
       <a class="btn secondary" href="/">Continue without signing in →</a>`;
     return;

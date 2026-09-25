@@ -13,10 +13,13 @@
 # before the site is reachable by anyone but you.
 
 auth:
-  # With this false (or this file absent) the site has NO authentication and
-  # says so on every page. That is the old behaviour, kept so an existing local
-  # demo does not break the moment this file lands.
-  enabled: true
+  # Ships FALSE on purpose. Copying this file and restarting must never gate the
+  # site behind the placeholder client_id below - that would send everyone to an
+  # Okta application that does not exist, with no way back in except editing this
+  # file. Fill in issuer/client_id/redirect_uri first, THEN set this to true.
+  #
+  # While false the site has NO authentication and says so on every page.
+  enabled: false
 
   # ---------------------------------------------------------------- Okta app
   # In Okta: Applications > Create App Integration

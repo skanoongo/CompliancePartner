@@ -288,11 +288,27 @@ def _secure_cookie(resp, name, value, seconds):
 def auth_config():
     """Whether sign-in is on. The login page reads this; it exposes no secret."""
     cfg = _cfg()
+    # Say which step is outstanding. "Sign-in is off" is true whether the config
+    # file is absent, present but half-filled, or deliberately disabled, and
+    # telling someone to copy a file they already copied is no help at all.
+    have_file = auth.CONFIG_PATH.is_file()
+    missing = [k for k in ("issuer", "client_id", "redirect_uri") if not cfg.get(k)]
+    if not have_file:
+        step = "no_config"
+    elif missing:
+        step = "incomplete"
+    elif not cfg.get("enabled"):
+        step = "disabled"
+    else:
+        step = "ready"
     return jsonify({
         "enabled": bool(cfg.get("enabled")),
         "configured": not cfg.get("_broken"),
         "error": cfg.get("_broken", ""),
         "issuer": cfg.get("issuer", "") if cfg.get("enabled") else "",
+        "step": step,
+        "missing": missing,
+        "configPath": str(auth.CONFIG_PATH),
     })
 
 
