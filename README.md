@@ -78,6 +78,41 @@ the sign-in.
 the workbook: an out-of-scope project has no sheet at all rather than an empty one,
 so a scoped run cannot be misread as "nothing changed" everywhere else.
 
+## Sign-in (Okta)
+
+Turn this on before anyone but you can reach the site.
+
+```bash
+cp config/auth.example.yaml config/auth.yaml
+# fill in issuer / client_id / redirect_uri, then:
+docker compose up -d --build
+```
+
+In Okta: **Applications → Create App Integration → OIDC → Web Application**. Web, not
+SPA — the code exchange happens in the runner, so no token ever reaches the browser;
+PKCE is used as well. The sign-in redirect URI must match `redirect_uri` exactly.
+
+**Why it matters more than a usual login.** The runner keeps a browser signed in to
+the system under review and serves it at `/session`. Unauthenticated, anyone who
+opens the site gets an interactive, already-authenticated window into that system —
+not a screenshot of one. The capture is read-only; that window is not.
+
+With sign-in on, nginx gates `/`, `/api/`, `/session/` and `/choose` through
+`auth_request`; only `/login`, `/auth/*` and the stylesheet are reachable signed out.
+Browsers are redirected to `/login`, API calls get a 401.
+
+**Entitlements.** After signing in, people land on `/choose` — the SOX systems their
+Okta groups allow, mapped in `config/auth.yaml`. Deny by default: an unmapped group
+grants nothing, and a user in no mapped group signs in to an empty picker rather than
+to everything. The `?system=` the picker links to decides what is *shown*;
+`/api/prepare` re-checks entitlement server-side on every run, so editing the URL
+grants nothing.
+
+With no `config/auth.yaml` the site has **no authentication** and says so on the login
+page and the picker. That is the old behaviour, kept so an existing local demo does
+not break the moment the file lands — but it is not a state to leave a shared
+deployment in.
+
 ## Publishing it under its hostname
 
 The site answers to `cw_CompliancePartnercore.internal.coreweave.com`. To reach it
@@ -109,6 +144,9 @@ open http://cw_CompliancePartnercore.internal.coreweave.com/
 | `runner/workato_sox_capture.py` | change-management capture, and the shared browser/screen layer |
 | `runner/workato_uar_capture.py` | user access review: collaborator listing + evidence |
 | `runner/app.py` | the job API the page talks to |
+| `runner/auth.py` | Okta OIDC sign-in, sessions, and SOX system entitlements |
+| `web/html/login.html` | sign-in page |
+| `web/html/choose.html` | which SOX system am I working on |
 | `runner/entrypoint.sh` | builds the virtual desktop the capture photographs |
 | `docs/ARCHITECTURE.md` | why the runner carries a whole desktop, and how the pieces fit |
 | `docs/RUNBOOK.md` | running a monthly review, and what to do when one goes wrong |
@@ -184,6 +222,11 @@ The page drives these; they are also usable directly.
 
 | Endpoint | Purpose |
 |---|---|
+| `GET /auth/config` | whether sign-in is on (no secrets) |
+| `GET /auth/login` → `/auth/callback` | the Okta round trip |
+| `GET /auth/me` | who is signed in, and which systems they may work on |
+| `GET /auth/verify` | what nginx asks on every request |
+| `GET /auth/logout` | drop the session |
 | `GET /api/health` | runner state, whether an SSO session is stored |
 | `GET /api/capabilities` | which system/control pairs are backed by a real capture |
 | `GET /api/scope` | the workspaces and projects the selectors offer |
@@ -199,11 +242,13 @@ so two at once would photograph each other's windows and mix up the evidence.
 
 ## Limits worth knowing
 
-- **The runner holds a live Workato session.** Anyone who can reach the site can
-  start a capture, and anyone who can open the browser session tab is inside a
-  signed-in Workato window. There is no authentication in front of any of it. Keep
-  it on a trusted network, or put an authenticating proxy in front before it goes
-  anywhere shared.
+- **The runner holds a live Workato session.** With sign-in configured this is
+  behind Okta; with no `config/auth.yaml` it is not behind anything, and anyone who
+  can open `/session` is inside a signed-in Workato window. Configure Okta before
+  the site is reachable by anyone else.
+- **Sessions are cookies over whatever scheme you serve.** The cookie is marked
+  Secure only when the request arrives as https. On plain http it is not, so put TLS
+  in front before this leaves a trusted network.
 - **The review decisions in the page are still simulated** and reset on reload. The
   capture is real; the sign-off workflow around it is a prototype.
 - **The workbook is labelled with the current month.** The page's period selector is

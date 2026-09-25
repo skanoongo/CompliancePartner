@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · Compliance Partner</title>
+<link rel="stylesheet" href="auth.css">
+</head>
+<body class="authpage">
+
+<main class="authcard" role="main">
+  <div class="brand"><span class="mark" aria-hidden="true">✓</span>Compliance Partner</div>
+
+  <h1>Sign in</h1>
+  <p class="sub">Use your CoreWeave account. Access to each SOX system is granted by
+  your Okta groups.</p>
+
+  <div id="state" role="status"></div>
+
+  <p class="fineprint">This workspace holds live, signed-in sessions to the systems under
+  review. Sign-in is required for that reason, not only to identify you.</p>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Where to go after sign-in, if the user was sent here from somewhere specific.
+// Only same-site paths, so a crafted ?next= cannot bounce anyone off to another host.
+function nextTarget() {
+  const raw = new URLSearchParams(location.search).get('next') || '/';
+  return /^\/(?!\/)/.test(raw) ? raw : '/';
+}
+
+async function render() {
+  let cfg;
+  try {
+    cfg = await (await fetch('/auth/config')).json();
+  } catch (e) {
+    $('state').innerHTML = `<div class="notice bad"><strong>The runner is not reachable.</strong>
+      The sign-in service did not answer, so nobody can sign in right now.</div>`;
+    return;
+  }
+
+  if (cfg.error) {
+    $('state').innerHTML = `<div class="notice bad">
+      <strong>Sign-in is misconfigured</strong>
+      <p>${esc(cfg.error)}</p>
+      <p class="mono">Fix config/auth.yaml, then restart the runner.</p>
+      <p>Nothing is reachable until this is corrected — the site fails closed rather
+      than letting everyone through.</p></div>`;
+    return;
+  }
+
+  if (!cfg.enabled) {
+    $('state').innerHTML = `<div class="notice warn">
+      <strong>Sign-in is turned off</strong>
+      <p>This site currently has <strong>no authentication</strong>. Anyone who can reach
+      it can start captures and open a browser session that is already signed in to the
+      systems under review.</p>
+      <p class="mono">cp config/auth.example.yaml config/auth.yaml</p>
+      <p>Set <code>enabled: true</code> and fill in the Okta application details.</p>
+      </div>
+      <a class="btn secondary" href="/">Continue without signing in →</a>`;
+    return;
+  }
+
+  $('state').innerHTML =
+    `<a class="btn primary" href="/auth/login?next=${encodeURIComponent(nextTarget())}">
+       Sign in with Okta
+     </a>
+     ${cfg.issuer ? `<p class="fineprint">You will be sent to ${esc(cfg.issuer)}.</p>` : ''}`;
+}
+
+render();
+</script>
+</body></html>

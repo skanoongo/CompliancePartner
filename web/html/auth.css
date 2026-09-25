@@ -1,0 +1,211 @@
+/* Sign-in and system picker. Shares the workspace's tokens so the three pages
+   read as one product. */
+
+:root {
+  --navy: #182448;
+  --ink: #202c42;
+  --muted: #68768b;
+  --line: #e0e6ef;
+  --bg: #f5f7fb;
+  --blue: #315fe9;
+  --teal: #087f71;
+  --amber: #98600c;
+}
+
+* { box-sizing: border-box; }
+
+body.authpage {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 18px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.55 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.authcard {
+  width: 100%;
+  max-width: 460px;
+  padding: 34px 34px 30px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px #1e31550d;
+}
+
+.authcard.wide { max-width: 720px; }
+
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: 750;
+  letter-spacing: -.5px;
+  font-size: 19px;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 34px;
+  background: var(--navy);
+  color: white;
+  border-radius: 10px 10px 13px 5px;
+  font-size: 19px;
+}
+
+.brandrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+h1 { font-size: 24px; letter-spacing: -.5px; margin: 26px 0 6px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+
+.fineprint {
+  margin-top: 18px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.btn {
+  display: block;
+  width: 100%;
+  padding: 13px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 650;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--navy); color: white; border-color: var(--navy); }
+.btn.primary:hover { background: #22325c; }
+.btn.secondary { margin-top: 14px; }
+
+.textbtn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--blue);
+  font: inherit;
+  font-size: 12.5px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.notice {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfe;
+  font-size: 13px;
+}
+
+.notice p { margin: 8px 0 0; }
+.notice.warn { border-color: #eedcc0; background: #fdf6ec; color: var(--amber); }
+.notice.bad { border-color: #efc9c9; background: #fdecec; color: #9c2b2b; }
+.notice strong { color: inherit; }
+
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #f3f5f9;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pill.good { background: #eff9f3; color: var(--teal); border-color: #bfe3db; }
+.pill.warn { background: #fdf6ec; color: var(--amber); border-color: #eedcc0; }
+
+/* ---- system picker ---- */
+
+.syslist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.systile {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+
+.systile:hover {
+  border-color: #b9c8e8;
+  box-shadow: 0 4px 16px #1e315510;
+}
+
+.systile:active { transform: translateY(1px); }
+
+.sysmark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: #eef2fb;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.sysbody { flex: 1; min-width: 0; }
+.sysbody strong { display: block; }
+
+.sysbody small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .authcard { padding: 24px 20px 22px; }
+  .syslist { grid-template-columns: 1fr; }
+}

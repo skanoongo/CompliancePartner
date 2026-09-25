@@ -4,6 +4,7 @@
 # Live credentials for production systems. The .example file is the only one that
 # is ever committed. Do not remove these two lines.
 config/environments.yaml
+config/auth.yaml
 config/*.local.yaml
 
 # Capture output: screenshots of a signed-in Workato session, and the workbooks

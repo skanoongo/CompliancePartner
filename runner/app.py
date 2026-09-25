@@ -30,8 +30,9 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, make_response, redirect, request, send_file
 
+import auth
 import environments
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -240,6 +241,161 @@ def _run(job, cmd, secrets=()):
             _active = None
 
 
+# --------------------------------------------------------------------------- #
+# sign-in                                                                      #
+# --------------------------------------------------------------------------- #
+def _cfg():
+    try:
+        return auth.load_config()
+    except auth.ConfigError as exc:
+        app.logger.error("auth config: %s", exc)
+        # A broken config must not silently mean "no auth". Treat it as enabled
+        # with no way in, so the failure is visible instead of wide open.
+        return {"enabled": True, "_broken": str(exc), "entitlements": {},
+                "admin_groups": [], "session_hours": 8}
+
+
+def current_session():
+    """The signed-in user, or None."""
+    return auth.read_session(request.cookies.get(auth.SESSION_COOKIE))
+
+
+def _secure_cookie(resp, name, value, seconds):
+    resp.set_cookie(
+        name, value,
+        max_age=seconds, httponly=True, samesite="Lax",
+        # Set only over https, since the cookie is what stands between a stranger
+        # and a signed-in Workato window. On plain http this stays False or the
+        # browser drops it entirely.
+        secure=request.headers.get("X-Forwarded-Proto", request.scheme) == "https",
+        path="/",
+    )
+    return resp
+
+
+@app.get("/auth/config")
+def auth_config():
+    """Whether sign-in is on. The login page reads this; it exposes no secret."""
+    cfg = _cfg()
+    return jsonify({
+        "enabled": bool(cfg.get("enabled")),
+        "configured": not cfg.get("_broken"),
+        "error": cfg.get("_broken", ""),
+        "issuer": cfg.get("issuer", "") if cfg.get("enabled") else "",
+    })
+
+
+@app.get("/auth/login")
+def auth_login():
+    cfg = _cfg()
+    if not cfg.get("enabled"):
+        return redirect("/")
+    if cfg.get("_broken"):
+        return jsonify({"error": "auth_misconfigured", "message": cfg["_broken"]}), 500
+    nxt = request.args.get("next", "/")
+    try:
+        url, flow = auth.begin_login(cfg, nxt)
+    except auth.AuthError as exc:
+        return jsonify({"error": "okta_unreachable", "message": str(exc)}), 502
+    return _secure_cookie(make_response(redirect(url)), auth.FLOW_COOKIE, flow, 900)
+
+
+@app.get("/auth/callback")
+def auth_callback():
+    cfg = _cfg()
+    if not cfg.get("enabled"):
+        return redirect("/")
+    if request.args.get("error"):
+        return jsonify({
+            "error": request.args["error"],
+            "message": request.args.get("error_description", "Okta refused the sign-in."),
+        }), 401
+    try:
+        user, nxt = auth.complete_login(
+            cfg, request.args.get("code"), request.args.get("state"),
+            request.cookies.get(auth.FLOW_COOKIE))
+    except auth.AuthError as exc:
+        return jsonify({"error": "sign_in_failed", "message": str(exc)}), 401
+
+    systems = auth.entitled_systems(cfg, user["groups"])
+    admin = auth.is_admin(cfg, user["groups"])
+    payload = {**user, "systems": systems, "admin": admin}
+    token = auth.sign_session(payload, cfg.get("session_hours", 8))
+
+    # Straight to the picker unless they were heading somewhere specific.
+    dest = nxt if nxt and nxt not in ("/", "") else "/choose"
+    resp = make_response(redirect(dest))
+    _secure_cookie(resp, auth.SESSION_COOKIE, token, int(cfg.get("session_hours", 8) * 3600))
+    resp.set_cookie(auth.FLOW_COOKIE, "", max_age=0, path="/")
+    return resp
+
+
+@app.get("/auth/me")
+def auth_me():
+    cfg = _cfg()
+    if not cfg.get("enabled"):
+        return jsonify({"authenticated": False, "authRequired": False,
+                        "systems": [], "admin": False})
+    sess = current_session()
+    if not sess:
+        return jsonify({"authenticated": False, "authRequired": True}), 401
+    return jsonify({
+        "authenticated": True, "authRequired": True,
+        "email": sess.get("email", ""), "name": sess.get("name", ""),
+        "groups": sess.get("groups", []),
+        "systems": sess.get("systems", []),
+        "admin": sess.get("admin", False),
+    })
+
+
+@app.get("/auth/verify")
+def auth_verify():
+    """What nginx asks on every request (auth_request). 200 = let it through."""
+    cfg = _cfg()
+    if not cfg.get("enabled"):
+        return "", 200
+    if cfg.get("_broken"):
+        return "", 401
+    sess = current_session()
+    if not sess:
+        return "", 401
+    resp = make_response("", 200)
+    resp.headers["X-Auth-User"] = sess.get("email", "")
+    return resp
+
+
+@app.get("/auth/logout")
+def auth_logout():
+    cfg = _cfg()
+    target = auth.logout_url(cfg) if cfg.get("enabled") else None
+    resp = make_response(redirect(target or "/login"))
+    resp.set_cookie(auth.SESSION_COOKIE, "", max_age=0, path="/")
+    return resp
+
+
+# --------------------------------------------------------------------------- #
+# Gate every /api route as well, not only at the edge. nginx auth_request is the
+# front door, but the runner is directly reachable inside the compose network,
+# and only the app knows which SOX systems a given person may work on.
+OPEN_PATHS = ("/auth/", "/api/health")
+
+
+@app.before_request
+def require_session():
+    path = request.path
+    if path.startswith(OPEN_PATHS) or not path.startswith("/api/"):
+        return None
+    cfg = _cfg()
+    if not cfg.get("enabled"):
+        return None
+    if cfg.get("_broken"):
+        return jsonify({"error": "auth_misconfigured", "message": cfg["_broken"]}), 500
+    if not current_session():
+        return jsonify({"error": "not_signed_in",
+                        "message": "Sign in with Okta to use this."}), 401
+    return None
+
+
 @app.get("/api/health")
 def health():
     with _lock:
@@ -334,6 +490,20 @@ def prepare():
     month = str(body.get("month", "")).strip() or datetime.now().strftime("%B %Y")
     workspace = str(body.get("workspace", "")).strip()
     project = str(body.get("project", "")).strip() or "all"
+
+    # Signing in is not the same as being allowed to work on THIS system. A
+    # reviewer entitled to NetSuite must not be able to start a Workato capture
+    # just by posting a different body than the picker offered them.
+    cfg = _cfg()
+    if cfg.get("enabled"):
+        sess = current_session()
+        if not auth.may_use(cfg, sess, system):
+            return jsonify({
+                "error": "not_entitled",
+                "message": f"You are not entitled to work on {system or 'this system'}. "
+                           f"Ask a SOX administrator to add the Okta group that grants it.",
+                "systems": (sess or {}).get("systems", []),
+            }), 403
 
     capture = CAPTURES.get((system.lower(), control_id.lower()))
     if capture is None:

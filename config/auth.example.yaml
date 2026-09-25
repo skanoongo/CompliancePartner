@@ -1,0 +1,99 @@
+# Compliance Partner - Okta sign-in and SOX system entitlements.
+#
+#   cp config/auth.example.yaml config/auth.yaml
+#
+# config/auth.yaml is gitignored. This example is the committed one and must
+# never hold a real client secret.
+#
+# WHY THIS MATTERS MORE THAN A USUAL LOGIN
+# ----------------------------------------
+# The runner keeps a browser signed in to Workato and serves it at /session.
+# Without a login in front, anyone who can open the site gets an interactive,
+# already-authenticated Workato window - not a picture of one. Turn this on
+# before the site is reachable by anyone but you.
+
+auth:
+  # With this false (or this file absent) the site has NO authentication and
+  # says so on every page. That is the old behaviour, kept so an existing local
+  # demo does not break the moment this file lands.
+  enabled: true
+
+  # ---------------------------------------------------------------- Okta app
+  # In Okta: Applications > Create App Integration
+  #   Sign-in method: OIDC - OpenID Connect
+  #   Application type: Web Application
+  #     (Web, not SPA: the code exchange happens in the runner, so the browser
+  #      never holds a token. PKCE is used as well.)
+  #
+  # Sign-in redirect URI must match `redirect_uri` below EXACTLY, including
+  # scheme, port and trailing path.
+
+  # Your Okta org, or a custom authorization server:
+  #   https://coreweave.okta.com                     (org server)
+  #   https://coreweave.okta.com/oauth2/default      (default custom server)
+  # Whichever you use here must be the issuer Okta puts in the ID token.
+  issuer: https://coreweave.okta.com
+
+  client_id: 0oaEXAMPLEexample123
+
+  # Leave blank for a public client using PKCE only. For a Web application Okta
+  # issues a secret - keep it out of this file with ${VAR} and pass it in the
+  # environment (docker compose reads .env, which is gitignored).
+  client_secret: ${OKTA_CLIENT_SECRET}
+
+  # Where Okta sends the browser back. Must be an address the USER's browser can
+  # reach, and must be registered in Okta.
+  #   local:    http://localhost:8080/auth/callback
+  #   hostname: http://cw-compliancepartnercore.internal.coreweave.com/auth/callback
+  redirect_uri: http://localhost:8080/auth/callback
+
+  # Optional: where Okta returns after a single logout. Register it in Okta as a
+  # "Sign-out redirect URI". Omit to only drop the local session.
+  post_logout_redirect_uri: http://localhost:8080/login
+
+  # Ask for groups so entitlements below can be evaluated. The org authorization
+  # server returns `groups` only if you add a groups claim to the app - Okta:
+  # Applications > your app > Sign On > Group claims filter (or add a `groups`
+  # claim on the authorization server). Without it, everyone signs in with no
+  # entitlements and an empty picker, which is safe but unhelpful.
+  scopes: [openid, profile, email, groups]
+  groups_claim: groups
+
+  # How long a session lasts before another Okta round trip.
+  session_hours: 8
+
+  # ------------------------------------------------------- who may do what
+  # Okta group -> the SOX systems its members may work on. Names must match the
+  # systems in the page exactly:
+  #   Workato, NetSuite, Workday, Salesforce, Coupa, Orderful, GitHub, Okta, FloQast
+  #
+  # Deny by default. A group that is not listed grants nothing, and a user in no
+  # listed group can sign in but sees an empty system picker. The picker never
+  # falls open to everything.
+  entitlements:
+    SOX-Compliance-All:
+      - Workato
+      - NetSuite
+      - Workday
+      - Salesforce
+      - Coupa
+      - Orderful
+      - GitHub
+      - Okta
+      - FloQast
+
+    SOX-ITGC-Workato:
+      - Workato
+
+    SOX-ITGC-NetSuite:
+      - NetSuite
+
+    SOX-Finance-Systems:
+      - NetSuite
+      - Coupa
+      - FloQast
+
+  # Members of these groups may work on every system regardless of the mapping
+  # above. Keep this list short.
+  admin_groups:
+    - SOX-Compliance-Admins

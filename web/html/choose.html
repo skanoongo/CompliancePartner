@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Choose a system · Compliance Partner</title>
+<link rel="stylesheet" href="auth.css">
+</head>
+<body class="authpage wide">
+
+<main class="authcard wide" role="main">
+  <div class="brandrow">
+    <div class="brand"><span class="mark" aria-hidden="true">✓</span>Compliance Partner</div>
+    <div class="who" id="who"></div>
+  </div>
+
+  <h1>Which system are you working on?</h1>
+  <p class="sub">These are the SOX systems your Okta groups entitle you to. Choosing one
+  opens the workspace for it.</p>
+
+  <div id="systems" class="syslist" role="list"></div>
+  <div id="note"></div>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Initials used by the workspace sidebar, so a system looks the same in both places.
+const MARK = {
+  Workato: 'W', NetSuite: 'NS', Workday: 'WD', Salesforce: 'SF', Coupa: 'C',
+  Orderful: 'O', GitHub: 'GH', Okta: 'OK', FloQast: 'F'
+};
+
+// Which systems have a real capture behind them, so the picker can say so rather
+// than implying every tile does the same thing.
+let LIVE = [];
+
+function tile(sys) {
+  const live = LIVE.filter(c => c.system.toLowerCase() === sys.toLowerCase());
+  const badge = live.length
+    ? `<span class="pill good">${live.length} live control${live.length > 1 ? 's' : ''}</span>`
+    : `<span class="pill">Prototype only</span>`;
+  const detail = live.length
+    ? live.map(c => esc(c.control)).join(' · ')
+    : 'Evidence is simulated for this system';
+  return `<a class="systile" role="listitem" href="/?system=${encodeURIComponent(sys)}">
+            <span class="sysmark">${esc(MARK[sys] || sys.slice(0, 2).toUpperCase())}</span>
+            <span class="sysbody">
+              <strong>${esc(sys)}</strong>
+              <small>${detail}</small>
+            </span>
+            ${badge}
+          </a>`;
+}
+
+async function render() {
+  let me;
+  try {
+    const res = await fetch('/auth/me');
+    if (res.status === 401) { location.replace('/login?next=%2Fchoose'); return; }
+    me = await res.json();
+  } catch (e) {
+    $('systems').innerHTML = `<div class="notice bad">The runner is not reachable.</div>`;
+    return;
+  }
+
+  if (!me.authRequired) {
+    // Sign-in is off. Say so plainly rather than pretending this page gates anything.
+    $('who').innerHTML = `<span class="pill warn">No sign-in</span>`;
+    $('note').innerHTML = `<div class="notice warn" style="margin-top:20px">
+      <strong>Sign-in is turned off, so this page is not restricting anything.</strong>
+      Every system is listed because nobody is identified. Turn on Okta in
+      <span class="mono">config/auth.yaml</span> to make entitlements mean something.</div>`;
+    $('systems').innerHTML = Object.keys(MARK).map(tile).join('');
+    return;
+  }
+
+  $('who').innerHTML =
+    `<span>${esc(me.name || me.email || 'Signed in')}</span>
+     ${me.admin ? '<span class="pill good">Admin</span>' : ''}
+     <a class="textbtn" href="/auth/logout">Sign out</a>`;
+
+  const systems = me.systems || [];
+  if (!systems.length) {
+    $('systems').innerHTML = '';
+    $('note').innerHTML = `<div class="notice warn">
+      <strong>You do not have access to any SOX system yet.</strong>
+      <p>You signed in as ${esc(me.email || 'this account')}, but none of your Okta groups
+      are mapped to a system.</p>
+      ${me.groups && me.groups.length
+        ? `<p class="mono">Your groups: ${esc(me.groups.join(', '))}</p>`
+        : `<p class="mono">Okta returned no groups for you. The application may not be
+             sending a groups claim.</p>`}
+      <p>Ask a SOX administrator to map one of your groups in
+      <span class="mono">config/auth.yaml</span>.</p></div>`;
+    return;
+  }
+  $('systems').innerHTML = systems.map(tile).join('');
+  if (me.admin) {
+    $('note').innerHTML = `<p class="fineprint">You are in an admin group, so every system
+      is listed regardless of the group mapping.</p>`;
+  }
+}
+
+fetch('/api/capabilities')
+  .then(r => r.ok ? r.json() : null)
+  .then(d => { if (d && d.live) LIVE = d.live; })
+  .catch(() => {})
+  .finally(render);
+</script>
+</body></html>

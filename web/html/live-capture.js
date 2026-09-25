@@ -439,6 +439,46 @@
 
   // ------------------------------------------------------------------ startup
 
+  // ----------------------------------------------------- who is signed in
+
+  // The picker sends people here as /?system=Workato. Honour that, but only for a
+  // system they are actually entitled to - the query string is the user's to edit,
+  // so it decides what is SHOWN, never what is ALLOWED. /api/prepare re-checks
+  // entitlement server-side on every run.
+  function applyIdentity(me) {
+    if (!me || !me.authRequired) return;
+
+    const entitled = me.admin ? systems.slice() : (me.systems || []);
+    if (entitled.length) {
+      // Replace the sidebar list with what this person may work on.
+      systems.length = 0;
+      entitled.forEach(s => systems.push(s));
+      if (!systems.includes(app.system)) app.system = systems[0];
+    }
+
+    const wanted = new URLSearchParams(location.search).get('system');
+    if (wanted && systems.some(s => s.toLowerCase() === wanted.toLowerCase())) {
+      app.system = systems.find(s => s.toLowerCase() === wanted.toLowerCase());
+    }
+
+    const right = document.querySelector('.topright');
+    if (right && !document.getElementById('cpWho')) {
+      const who = document.createElement('span');
+      who.id = 'cpWho';
+      who.className = 'cp-who';
+      who.innerHTML =
+        `<a class="textbtn" href="/choose" title="Work on a different system">Switch system</a>
+         <span class="cp-whoname" title="${esc(me.email || '')}">${esc(me.name || me.email || '')}</span>
+         <a class="textbtn" href="/auth/logout">Sign out</a>`;
+      right.insertBefore(who, right.firstChild);
+    }
+    render();
+  }
+
+  api('/auth/me')
+    .then(({ ok, body }) => { if (ok) applyIdentity(body); })
+    .catch(() => { /* sign-in off or runner down: the page is unchanged */ });
+
   Promise.all([api('/api/capabilities'), api('/api/scope')])
     .then(([caps, sc]) => {
       if (!caps.ok || !caps.body || !caps.body.live) return;
