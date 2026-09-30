@@ -111,6 +111,43 @@ Three things differ from Workato and each one breaks a naive port, so
 that. Form sign-in is attempted; when it does not land, the run pauses and asks a
 person to finish in the browser session — the same fallback as Workato.
 
+## Where credentials come from
+
+Doppler, when `DOPPLER_TOKEN` is set — and then **Doppler only**.
+`config/environments.yaml` is not read at all in that case. That is deliberate:
+a fallback that quietly reaches for a file on disk is how a run ends up
+authenticating with a credential that was rotated precisely because it should no
+longer be used. A token that cannot be read is a hard error, not a downgrade.
+
+```bash
+cp .env.example .env        # then set DOPPLER_TOKEN=dp.st....
+docker compose up -d
+curl -s localhost:8080/api/environments | jq .source
+```
+
+Doppler holds one secret per field, named `ENVIRONMENTS_<SYSTEM>_<FIELD>`:
+
+```
+ENVIRONMENTS_WORKATO_PASSWORD        ENVIRONMENTS_NETSUITE_ACCOUNT_ID
+ENVIRONMENTS_WORKATO_USERNAME        ENVIRONMENTS_NETSUITE_CERTIFICATE_ID
+ENVIRONMENTS_WORKATO_WORKSPACE       ENVIRONMENTS_NETSUITE_ASSERTION_ALG
+```
+
+The naming **is** the schema — adding a system needs secrets, not code. `enabled`
+is parsed as a boolean and `workspaces` as a comma-separated list; everything
+else is carried through as a string.
+
+Without a token the YAML file is used, so a checkout with no Doppler access
+still works. `/api/environments` reports which backend answered, so it is never
+a guess.
+
+**Redaction covers secrets, not configuration.** Doppler holds base URLs and
+workspace names next to passwords, and masking those turned a job log into
+`Logged in. Current URL: ********` — removing the single most important fact in
+an evidence trail to protect something that was never secret. Only entries whose
+name contains password/secret/token/key are masked, and with Doppler that covers
+every such secret in the project rather than only the fields a given run touched.
+
 ## Sign-in (Okta)
 
 Turn this on before anyone but you can reach the site.

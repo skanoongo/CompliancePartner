@@ -526,6 +526,9 @@ def list_environments():
     except environments.ConfigError as exc:
         return jsonify({"error": "config_error", "message": str(exc)}), 500
     return jsonify({
+        # Which backend answered, so it is never a guess whether a run is using
+        # Doppler or a file on disk.
+        "source": environments.source(),
         "configPath": str(environments.CONFIG_PATH),
         "configured": bool(envs),
         "environments": [environments.public(c) for c in envs.values()],
