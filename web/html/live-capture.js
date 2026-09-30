@@ -469,6 +469,26 @@
     });
   }
 
+  // The administration page gains the inventory, above the user list: you assign
+  // people to systems, so the systems have to be the thing you can change first.
+  if (typeof adminView === 'function') {
+    const protoAdminView = adminView;
+    adminView = function () {
+      const html = protoAdminView();
+      const panel = systemsPanel();
+      // adminView ends with the page footer. Appending put the inventory BELOW
+      // it, which reads as something bolted on after the page had finished.
+      // Insert before the trailing explanatory block instead, so it sits with
+      // the other administration cards.
+      const anchors = ['<details class="audit"', '<details', '<div class="footer"'];
+      for (const a of anchors) {
+        const i = html.lastIndexOf(a);
+        if (i > 0) return html.slice(0, i) + panel + html.slice(i);
+      }
+      return html + panel;
+    };
+  }
+
   const protoRender = render;
   render = function () {
     protoRender();
@@ -511,6 +531,115 @@
     }
     render();
   }
+
+  // --------------------------------------------- the SOX system inventory
+  //
+  // The list lived in three places - a sidebar array, a longer inventory beside
+  // it, and a constant in Python - so adding a system meant editing code in two
+  // languages and rebuilding. It is reference data an administrator maintains,
+  // so it comes from the runner and is edited on the Administration page.
+  let INVENTORY = { systems: [], wired: [] };
+
+  function applyInventory(d) {
+    if (!d || !Array.isArray(d.systems) || !d.systems.length) return;
+    INVENTORY = { systems: d.systems.slice(), wired: (d.wired || []).slice() };
+
+    // These are const arrays; replace their CONTENTS so every existing reader
+    // (visibleSystems, the sidebar, the scope picker) sees the change.
+    const swap = (arr, next) => {
+      if (!Array.isArray(arr)) return;
+      arr.length = 0;
+      next.forEach(x => arr.push(x));
+    };
+    if (typeof allSoxSystems !== 'undefined') swap(allSoxSystems, INVENTORY.systems);
+    // accessScopes is derived from the inventory at load; it would otherwise
+    // still offer systems that have been removed.
+    if (typeof accessScopes !== 'undefined') {
+      const extra = (typeof auditCatalog !== 'undefined' ? auditCatalog : []).map(c => c.scope);
+      swap(accessScopes, [...new Set([...INVENTORY.systems, ...extra])].sort());
+    }
+    // The sidebar shortlist: what this person may actually reach.
+    if (typeof systems !== 'undefined' && typeof visibleSystems === 'function') {
+      swap(systems, visibleSystems().slice(0, 9));
+      if (!systems.includes(app.system) && systems.length) app.system = systems[0];
+    }
+  }
+
+  function refreshInventory() {
+    return api('/api/sox-systems')
+      .then(({ ok, body }) => { if (ok) applyInventory(body); })
+      .catch(() => {});
+  }
+
+  function systemsPanel() {
+    const wired = new Set(INVENTORY.wired.map(w => w.toLowerCase()));
+    const rows = INVENTORY.systems.map(name => {
+      const locked = wired.has(name.toLowerCase());
+      return `<li class="cp-sysrow">
+          <span class="cp-sysname">${esc(name)}</span>
+          ${locked
+            ? '<span class="cp-badge">Capture wired</span>'
+            : `<button class="textbtn cp-sysdel" onclick="cpRemoveSystem(${JSON.stringify(name).replace(/"/g, '&quot;')})"
+                       aria-label="Remove ${esc(name)}">Remove</button>`}
+        </li>`;
+    }).join('');
+
+    return `<section class="card cp-systems">
+        <div class="cardhead">
+          <div>
+            <h2>SOX systems</h2>
+            <div class="sub">The inventory people can be assigned to. ${INVENTORY.systems.length} systems.</div>
+          </div>
+        </div>
+        <div class="pad">
+          <div class="cp-sysadd">
+            <label class="fieldlabel" for="cpNewSystem">Add a system</label>
+            <div class="cp-sysaddrow">
+              <input id="cpNewSystem" class="select" placeholder="e.g. Snowflake"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();cpAddSystem()}">
+              <button class="btn primary" onclick="cpAddSystem()">Add</button>
+            </div>
+            <p id="cpSysErr" class="err" hidden></p>
+          </div>
+          <ul class="cp-syslist">${rows}</ul>
+          <p class="sub">Removing a system also removes it from everyone assigned to it &mdash;
+          an assignment to something that no longer exists is one nobody can see or revoke.
+          A system a capture reads cannot be removed: the control would still be offered and
+          could not be run.</p>
+        </div>
+      </section>`;
+  }
+
+  window.cpAddSystem = async function () {
+    const input = document.getElementById('cpNewSystem');
+    const err = document.getElementById('cpSysErr');
+    if (!input) return;
+    const name = input.value.trim();
+    if (!name) return;
+    const { ok, body } = await api('/api/sox-systems',
+      { method: 'POST', body: JSON.stringify({ name }) });
+    if (!ok) {
+      if (err) { err.textContent = (body && body.message) || 'Could not add that.'; err.hidden = false; }
+      return;
+    }
+    input.value = '';
+    if (err) err.hidden = true;
+    applyInventory(body);
+    render();
+    toast(name + ' added to the inventory.');
+  };
+
+  window.cpRemoveSystem = async function (name) {
+    const { ok, body } = await api('/api/sox-systems/' + encodeURIComponent(name),
+      { method: 'DELETE' });
+    if (!ok) {
+      toast((body && body.message) || 'Could not remove that.');
+      return;
+    }
+    applyInventory(body);
+    render();
+    toast(name + ' removed, and unassigned from anyone who had it.');
+  };
 
   // ------------------------------------------------- identity from the server
   //
@@ -592,9 +721,10 @@
     }
   }
 
-  api('/api/whoami')
-    .then(({ ok, body }) => {
-      if (ok) { adoptServerUser(body); wrapAdminSave(); }
+  Promise.all([api('/api/whoami'), api('/api/sox-systems')])
+    .then(([me, inv]) => {
+      if (inv.ok) applyInventory(inv.body);
+      if (me.ok) { adoptServerUser(me.body); wrapAdminSave(); }
     })
     .catch(() => { /* runner down: the page keeps its own demo identity */ });
 

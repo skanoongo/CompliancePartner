@@ -31,7 +31,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
 
-from core import auth, environments, users
+from core import auth, environments, systems, users
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("CAPTURE_DATA_DIR", "/data"))
@@ -77,9 +77,20 @@ CAPTURES = {
     },
 }
 
-# The one system inventory, owned by the directory. Two copies would let
-# "granted" and "assignable" drift apart without anything noticing.
-SOX_SYSTEMS = users.ALL_SYSTEMS
+def wired_systems():
+    """Systems a capture is attached to, spelled as the inventory spells them.
+
+    CAPTURES is keyed lowercase; title-casing that gives "Netsuite" where the
+    inventory says "NetSuite". Matching is case-insensitive so the lock held
+    either way, but a label shown to an administrator should be the real name.
+    """
+    inventory = systems.all_systems()
+    out = []
+    for key, _ in CAPTURES:
+        match = next((s for s in inventory if s.lower() == key.lower()), key.title())
+        if match not in out:
+            out.append(match)
+    return sorted(out)
 
 app = Flask(__name__)
 
@@ -393,9 +404,41 @@ def api_directory_names():
 
 @app.get("/api/sox-systems")
 def api_sox_systems():
-    """Every system a person can be assigned to, for the assignment UI."""
-    return jsonify({"systems": SOX_SYSTEMS, "roles": users.ROLES,
-                    "roleModules": users.ROLE_MODULES})
+    """The inventory: every system a person can be assigned to."""
+    return jsonify({
+        "systems": systems.all_systems(),
+        "wired": wired_systems(),       # these cannot be removed
+        "roles": users.ROLES,
+        "roleModules": users.ROLE_MODULES,
+    })
+
+
+@app.post("/api/sox-systems")
+def api_sox_system_add():
+    who, err = _require_admin()
+    if err:
+        return err
+    name = str((request.get_json(silent=True) or {}).get("name", "")).strip()
+    try:
+        inventory = systems.add(name)
+    except systems.SystemError_ as exc:
+        return jsonify({"error": "invalid", "message": str(exc)}), 400
+    return jsonify({"ok": True, "systems": inventory, "added": name})
+
+
+@app.delete("/api/sox-systems/<path:name>")
+def api_sox_system_remove(name):
+    who, err = _require_admin()
+    if err:
+        return err
+    try:
+        # Dropping it from every user's scopes is part of removing it, not a
+        # follow-up someone has to remember.
+        inventory = systems.remove(name, wired=wired_systems(),
+                                   on_removed=users.drop_scope)
+    except systems.SystemError_ as exc:
+        return jsonify({"error": "invalid", "message": str(exc)}), 400
+    return jsonify({"ok": True, "systems": inventory, "removed": name})
 
 
 def _require_admin():

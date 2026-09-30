@@ -33,6 +33,8 @@ import re
 import threading
 from pathlib import Path
 
+from core import systems
+
 STORE = Path(os.environ.get("USERS_STORE", "/data/users.json"))
 
 # Role -> the modules of the application that role may open. "admin" is the
@@ -46,22 +48,19 @@ ROLE_MODULES = {
 }
 ROLES = list(ROLE_MODULES)
 
-# Every SOX system someone can be assigned to. Kept here rather than imported
-# from app.py so the directory does not depend on the web layer; app.py serves
-# this same list to the assignment UI.
-ALL_SYSTEMS = [
-    "1Password", "Argo", "Billing TSDB", "CoStar", "Coupa", "Data Lake", "Doppler",
-    "Equity Edge", "FloQast", "GitHub", "JPMorgan", "Kyriba", "Linux (OS)",
-    "NetSuite", "Okta", "Orderful", "Salesforce", "Snowflake", "Vanta",
-    "Wiz", "Workato", "Workday", "Zip", "Zuora",
-]
+# The inventory is administrator-maintained reference data; core.systems owns it.
+# Re-exported so existing callers keep working.
+
+
+def ALL_SYSTEMS():  # noqa: N802 - kept callable-compatible with the old constant
+    return systems.all_systems()
 
 # Seeded on first run so an empty directory never locks everyone out. These match
 # the names the page shipped with, so nothing appears to change on upgrade.
 SEED = [
     # Bootstrap administrator. A fresh volume has to contain someone who can
     # reach User Administration, or the directory is unmanageable from the UI.
-    {"id": "admin", "name": "admin", "role": "Admin", "scopes": ALL_SYSTEMS},
+    {"id": "admin", "name": "admin", "role": "Admin", "scopes": []},
     {"id": "minh", "name": "Minh Nguyen", "role": "Admin", "scopes": []},
     {"id": "saloni", "name": "Saloni Palkar", "role": "Internal Audit User", "scopes": []},
     {"id": "spandana", "name": "Spandana Bolla", "role": "Control Preparer",
@@ -111,16 +110,18 @@ def all_users():
 def _shape(u):
     role = u.get("role") if u.get("role") in ROLE_MODULES else "Control Preparer"
     scopes = u.get("scopes") or []
+    is_admin = role == "Admin"
     return {
         "id": str(u.get("id", "")).lower(),
         "name": u.get("name") or str(u.get("id", "")),
         "role": role,
-        # An Admin is scoped to everything by definition, so an empty list for an
-        # Admin means "all" rather than "none" - the page's visibleSystems() makes
-        # the same assumption and they must not disagree.
-        "scopes": list(scopes),
+        # An Admin is scoped to everything by definition, and to the inventory as
+        # it stands NOW - a list frozen when the account was made goes stale the
+        # moment a system is added, and then the page shows an administrator
+        # fewer systems than exist.
+        "scopes": systems.all_systems() if is_admin else list(scopes),
         "modules": ROLE_MODULES[role][:],
-        "admin": role == "Admin",
+        "admin": is_admin,
     }
 
 
@@ -210,3 +211,24 @@ def may_use(user, system):
         return True
     want = str(system).strip().lower()
     return any(str(s).strip().lower() == want for s in user.get("scopes", []))
+
+
+def drop_scope(system):
+    """Remove one system from every user's scopes. Called when it leaves the
+    inventory: a scope naming a system that no longer exists is an assignment
+    nobody can see and nobody can revoke."""
+    want = str(system).strip().lower()
+    changed = 0
+    with _lock:
+        rows = _read()
+        if rows is None:
+            return 0
+        for u in rows:
+            before = u.get("scopes") or []
+            after = [s for s in before if str(s).strip().lower() != want]
+            if len(after) != len(before):
+                u["scopes"] = after
+                changed += 1
+        if changed:
+            _write(rows)
+    return changed

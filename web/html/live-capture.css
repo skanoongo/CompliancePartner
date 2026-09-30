@@ -203,3 +203,60 @@
   font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- SOX system inventory, on the Administration page --------------------- */
+
+.cp-systems .pad { display: grid; gap: 16px; }
+
+.cp-sysadd .fieldlabel {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cp-sysaddrow { display: flex; gap: 10px; }
+.cp-sysaddrow .select { flex: 1; min-width: 0; }
+
+.cp-syslist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+
+.cp-sysrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+
+.cp-sysname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Destructive, so it reads as destructive - but quietly, since most rows have one. */
+.cp-sysdel { color: #9c2b2b; font-size: 12px; }
+.cp-sysdel:hover { text-decoration: underline; }
+
+.cp-systems .err {
+  margin: 10px 0 0;
+  padding: 8px 11px;
+  border: 1px solid #efc9c9;
+  border-radius: 8px;
+  background: #fdecec;
+  color: #9c2b2b;
+  font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  .cp-sysaddrow { flex-direction: column; }
+  .cp-syslist { grid-template-columns: 1fr; }
+}
