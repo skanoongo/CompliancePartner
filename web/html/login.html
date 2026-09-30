@@ -53,7 +53,85 @@ async function render() {
     return;
   }
 
+  // Okta off: ask who this is. The site is still gated - otherwise the workspace
+  // shows every system to anyone who opens the address.
   if (!cfg.enabled) {
+    $('state').innerHTML = `
+      <form id="localForm" autocomplete="off">
+        <label class="fieldlabel" for="who">Your name</label>
+        <input id="who" name="who" class="select" placeholder="e.g. Minh Nguyen"
+               autocapitalize="words" autocomplete="name" required>
+        <button class="btn primary" type="submit" style="margin-top:14px">Continue</button>
+        <p id="whoErr" class="err" hidden></p>
+      </form>
+      <details class="who-help">
+        <summary>Who can sign in?</summary>
+        <p>Anyone in the user directory. An administrator adds people and assigns
+           their SOX systems under <strong>User Administration</strong>.</p>
+        <div id="whoList" class="who-list">Loading…</div>
+      </details>
+      <div class="notice warn" style="margin-top:20px">
+        <strong>Local mode — a name is taken at face value</strong>
+        <p>This decides which systems you see, not that you are who you say. Configure
+           Okta in <span class="mono">config/auth.yaml</span> before this address is
+           reachable by anyone you would not hand the password to.</p>
+      </div>`;
+
+    // Show the directory: a name typed blind is a guessing game, and this page
+    // already admits it is not proving identity.
+    fetch('/api/sox-systems').then(() => {}).catch(() => {});
+    fetch('/api/whoami').then(r => r.json()).then(() => {}).catch(() => {});
+
+    const form = $('localForm');
+    const err = $('whoErr');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.hidden = true;
+      const name = $('who').value.trim();
+      if (!name) return;
+      let res, body;
+      try {
+        res = await fetch('/api/signin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: name })
+        });
+        body = await res.json();
+      } catch (e2) {
+        err.textContent = 'The runner is not reachable.';
+        err.hidden = false;
+        return;
+      }
+      if (!res.ok) {
+        err.textContent = (body && body.message) || 'That name was not accepted.';
+        err.hidden = false;
+        return;
+      }
+      location.replace(nextTarget() === '/' ? '/choose' : nextTarget());
+    });
+
+    // List the names that will work, so nobody has to guess.
+    fetch('/api/directory-names').then(r => r.ok ? r.json() : null).then(d => {
+      const el = $('whoList');
+      if (!el) return;
+      el.textContent = '';
+      if (!d || !d.names || !d.names.length) {
+        el.textContent = 'The directory could not be read.';
+        return;
+      }
+      d.names.forEach(n => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'who-chip';
+        b.textContent = n.name + ' · ' + n.role;
+        b.addEventListener('click', () => { $('who').value = n.name; $('who').focus(); });
+        el.appendChild(b);
+      });
+    }).catch(() => {});
+    return;
+  }
+
+  if (false) {
     // Name the step that is actually outstanding.
     const todo = {
       no_config: `<p class="mono">cp config/auth.example.yaml config/auth.yaml</p>

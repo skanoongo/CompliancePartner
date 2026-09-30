@@ -512,9 +512,91 @@
     render();
   }
 
-  api('/auth/me')
-    .then(({ ok, body }) => { if (ok) applyIdentity(body); })
-    .catch(() => { /* sign-in off or runner down: the page is unchanged */ });
+  // ------------------------------------------------- identity from the server
+  //
+  // The page shipped with a "Preview As" dropdown over an in-memory user list:
+  // identity was self-selected and an administrator's assignment vanished on
+  // reload. Both are replaced here. activeUser() answers from the server, so
+  // isAdmin(), canModule() and visibleSystems() - which the page already gets
+  // right - start describing the person who actually signed in.
+  function adoptServerUser(me) {
+    if (!me || !me.user) return;
+    const u = me.user;
+
+    // Shape it exactly as the page builds its own records, or its helpers break.
+    const record = {
+      id: u.id, name: u.name, role: u.role,
+      modules: (u.modules || []).slice(),
+      scopes: u.admin
+        ? (typeof accessScopes !== 'undefined' ? accessScopes.slice() : (u.scopes || []))
+        : (u.scopes || []),
+      prep: [0, 1, 2], monitor: [0, 1, 2], audit: '*'
+    };
+
+    if (typeof demoUsers !== 'undefined' && Array.isArray(demoUsers)) {
+      const i = demoUsers.findIndex(x => x.id === record.id);
+      if (i < 0) demoUsers.push(record); else demoUsers[i] = record;
+      try { activeUserId = record.id; } catch (e) { /* const: overridden below */ }
+    }
+    // Authoritative regardless of how the page stored it.
+    activeUser = () => record;
+
+    // A non-admin must not be able to become someone else from a dropdown.
+    if (!u.admin) {
+      const sel = document.getElementById('demoUser');
+      if (sel) {
+        const only = document.createElement('option');
+        only.value = record.id;
+        only.textContent = record.name + ' · ' + record.role;
+        sel.replaceChildren(only);
+        sel.disabled = true;
+        sel.title = 'You are signed in as ' + record.name;
+      }
+    }
+    if (u.unlisted) {
+      toast('You are signed in but not in the user directory - no systems are assigned yet.');
+    }
+    render();
+  }
+
+  // Persist what the administration screen changes. The page's own save updated
+  // an array in memory, so a grant was invisible to the person it was granted to
+  // and gone on reload.
+  function wrapAdminSave() {
+    if (typeof saveDemoUser !== 'function') return;
+    const protoSave = saveDemoUser;
+    saveDemoUser = function () {
+      const draft = (typeof userDraft !== 'undefined' && userDraft)
+        ? { id: userDraft.id, name: userDraft.name, role: userDraft.role,
+            scopes: (userDraft.scopes || []).slice() }
+        : null;
+      protoSave();                       // keeps the page's own validation and toast
+      if (!draft) return;
+      api('/api/users/' + encodeURIComponent(draft.id),
+          { method: 'PUT', body: JSON.stringify(draft) })
+        .then(({ ok, body }) => {
+          if (!ok) toast((body && body.message) || 'Saved on screen, but not stored.');
+        })
+        .catch(() => toast('Saved on screen, but the directory could not be written.'));
+    };
+
+    if (typeof confirmRemoveDemoUser === 'function') {
+      const protoRemove = confirmRemoveDemoUser;
+      confirmRemoveDemoUser = function (id) {
+        protoRemove(id);
+        api('/api/users/' + encodeURIComponent(id), { method: 'DELETE' })
+          .then(({ ok, body }) => {
+            if (!ok) toast((body && body.message) || 'Removed on screen only.');
+          }).catch(() => {});
+      };
+    }
+  }
+
+  api('/api/whoami')
+    .then(({ ok, body }) => {
+      if (ok) { adoptServerUser(body); wrapAdminSave(); }
+    })
+    .catch(() => { /* runner down: the page keeps its own demo identity */ });
 
   Promise.all([api('/api/capabilities'), api('/api/scope')])
     .then(([caps, sc]) => {

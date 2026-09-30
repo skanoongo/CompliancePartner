@@ -31,7 +31,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
 
-from core import auth, environments
+from core import auth, environments, users
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("CAPTURE_DATA_DIR", "/data"))
@@ -75,6 +75,16 @@ CAPTURES = {
         "produces": ["Excel workbook", "changes.csv", "screenshot manifest", "screenshots"],
     },
 }
+
+# Every SOX system a person can be assigned to. The page shows its own list for
+# the sidebar; this is the authoritative one the assignment UI and the entitlement
+# check both read, so "granted" and "runnable" cannot disagree.
+SOX_SYSTEMS = [
+    "1Password", "Argo", "Billing TSDB", "CoStar", "Coupa", "Data Lake", "Doppler",
+    "Equity Edge", "FloQast", "GitHub", "JPMorgan", "Kyriba", "Linux (OS)",
+    "NetSuite", "Okta", "Orderful", "Salesforce", "Snowflake", "Vanta",
+    "Wiz", "Workato", "Workday", "Zip", "Zuora",
+]
 
 app = Flask(__name__)
 
@@ -291,6 +301,159 @@ def _secure_cookie(resp, name, value, seconds):
     return resp
 
 
+LOCAL_COOKIE = "cp_local_user"
+
+
+def local_session():
+    """The locally signed-in user, when Okta is not configured."""
+    payload = auth.read_session(request.cookies.get(LOCAL_COOKIE))
+    return users.find(payload.get("id")) if payload else None
+
+
+def current_user():
+    """Who is asking, from whichever identity source is in play.
+
+    Okta when configured - the directory then only maps that person to systems.
+    Otherwise the name taken at the landing page. Authorization comes from the
+    directory either way, so there is one answer to "what may they see".
+    """
+    cfg = _cfg()
+    if cfg.get("enabled"):
+        sess = current_session()
+        if not sess:
+            return None
+        who = users.find(sess.get("email", "")) or users.find(
+            (sess.get("email", "").split("@") or [""])[0])
+        if who:
+            # Okta groups may grant admin even where the directory does not.
+            if sess.get("admin") and not who["admin"]:
+                who = {**who, "role": "Admin", "admin": True,
+                       "modules": users.ROLE_MODULES["Admin"][:]}
+            return who
+        # Signed in to Okta but absent from the directory: no systems, and the
+        # picker says so. Better than inventing access for an unknown person.
+        return {"id": sess.get("email", "unknown"), "name": sess.get("name") or sess.get("email", ""),
+                "role": "Control Preparer", "scopes": [], "modules": [], "admin": False,
+                "unlisted": True}
+    return local_session()
+
+
+def _identity_mode():
+    return "okta" if _cfg().get("enabled") else "local"
+
+
+@app.post("/api/signin")
+def api_signin():
+    """Local sign-in: a name from the directory.
+
+    Refused when Okta is configured - two ways in would mean the weaker one
+    decides, and a typed name is the weaker one.
+    """
+    if _identity_mode() == "okta":
+        return jsonify({"error": "okta_only",
+                        "message": "Okta is configured; sign in with Okta."}), 409
+    body = request.get_json(silent=True) or {}
+    who = users.find(body.get("username", ""))
+    if not who:
+        return jsonify({
+            "error": "unknown_user",
+            "message": "That name is not in the user directory. An administrator "
+                       "adds people under User Administration.",
+        }), 404
+    token = auth.sign_session({"id": who["id"]}, hours=12)
+    resp = make_response(jsonify({"ok": True, "user": who}))
+    return _secure_cookie(resp, LOCAL_COOKIE, token, 12 * 3600)
+
+
+@app.post("/api/signout")
+def api_signout():
+    resp = make_response(jsonify({"ok": True}))
+    resp.set_cookie(LOCAL_COOKIE, "", max_age=0, path="/")
+    resp.set_cookie(auth.SESSION_COOKIE, "", max_age=0, path="/")
+    return resp
+
+
+@app.get("/api/whoami")
+def api_whoami():
+    """Who is signed in, and what they may see. The page drives itself from this."""
+    who = current_user()
+    if not who:
+        return jsonify({"authenticated": False, "identity": _identity_mode()}), 401
+    return jsonify({"authenticated": True, "identity": _identity_mode(), "user": who})
+
+
+@app.get("/api/directory-names")
+def api_directory_names():
+    """Names and roles only, so the landing page need not be a guessing game.
+
+    Local mode only. With Okta configured this would hand the staff list to
+    anyone who can load the sign-in page, and there identity comes from Okta so
+    the list serves no purpose anyway.
+    """
+    if _identity_mode() == "okta":
+        return jsonify({"names": []})
+    return jsonify({"names": [{"name": u["name"], "role": u["role"]}
+                              for u in users.all_users()]})
+
+
+@app.get("/api/sox-systems")
+def api_sox_systems():
+    """Every system a person can be assigned to, for the assignment UI."""
+    return jsonify({"systems": SOX_SYSTEMS, "roles": users.ROLES,
+                    "roleModules": users.ROLE_MODULES})
+
+
+def _require_admin():
+    who = current_user()
+    if not who:
+        return None, (jsonify({"error": "not_signed_in"}), 401)
+    if not who.get("admin"):
+        return None, (jsonify({
+            "error": "not_admin",
+            "message": "Only an administrator can change who has access.",
+        }), 403)
+    return who, None
+
+
+@app.get("/api/users")
+def api_users():
+    who, err = _require_admin()
+    if err:
+        return err
+    return jsonify({"users": users.all_users(), "roles": users.ROLES})
+
+
+@app.put("/api/users/<uid>")
+@app.post("/api/users")
+def api_user_save(uid=None):
+    who, err = _require_admin()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if uid:
+        body = {**body, "id": uid}
+    try:
+        saved = users.upsert(body)
+    except users.UserError as exc:
+        return jsonify({"error": "invalid", "message": str(exc)}), 400
+    return jsonify({"ok": True, "user": saved})
+
+
+@app.delete("/api/users/<uid>")
+def api_user_remove(uid):
+    who, err = _require_admin()
+    if err:
+        return err
+    if uid.strip().lower() == who["id"]:
+        return jsonify({"error": "invalid",
+                        "message": "You cannot remove your own access."}), 400
+    try:
+        users.remove(uid)
+    except users.UserError as exc:
+        return jsonify({"error": "invalid", "message": str(exc)}), 400
+    return jsonify({"ok": True})
+
+
 @app.get("/auth/config")
 def auth_config():
     """Whether sign-in is on. The login page reads this; it exposes no secret."""
@@ -384,17 +547,20 @@ def auth_me():
 
 @app.get("/auth/verify")
 def auth_verify():
-    """What nginx asks on every request (auth_request). 200 = let it through."""
+    """What nginx asks on every request (auth_request). 200 = let it through.
+
+    Accepts either identity. With Okta off the site is still gated - by the
+    landing page asking who you are - because the alternative is a workspace
+    that shows every system to anyone who opens the address.
+    """
     cfg = _cfg()
-    if not cfg.get("enabled"):
-        return "", 200
     if cfg.get("_broken"):
         return "", 401
-    sess = current_session()
-    if not sess:
+    who = current_user()
+    if not who:
         return "", 401
     resp = make_response("", 200)
-    resp.headers["X-Auth-User"] = sess.get("email", "")
+    resp.headers["X-Auth-User"] = who.get("id", "")
     return resp
 
 
@@ -411,7 +577,8 @@ def auth_logout():
 # Gate every /api route as well, not only at the edge. nginx auth_request is the
 # front door, but the runner is directly reachable inside the compose network,
 # and only the app knows which SOX systems a given person may work on.
-OPEN_PATHS = ("/auth/", "/api/health")
+OPEN_PATHS = ("/auth/", "/api/health", "/api/signin", "/api/signout",
+              "/api/whoami", "/api/directory-names")
 
 
 @app.before_request
@@ -420,13 +587,14 @@ def require_session():
     if path.startswith(OPEN_PATHS) or not path.startswith("/api/"):
         return None
     cfg = _cfg()
-    if not cfg.get("enabled"):
-        return None
     if cfg.get("_broken"):
         return jsonify({"error": "auth_misconfigured", "message": cfg["_broken"]}), 500
-    if not current_session():
-        return jsonify({"error": "not_signed_in",
-                        "message": "Sign in with Okta to use this."}), 401
+    if not current_user():
+        return jsonify({
+            "error": "not_signed_in",
+            "message": ("Sign in with Okta to use this." if cfg.get("enabled")
+                        else "Sign in at the landing page to use this."),
+        }), 401
     return None
 
 
@@ -549,16 +717,16 @@ def prepare():
     # Signing in is not the same as being allowed to work on THIS system. A
     # reviewer entitled to NetSuite must not be able to start a Workato capture
     # just by posting a different body than the picker offered them.
-    cfg = _cfg()
-    if cfg.get("enabled"):
-        sess = current_session()
-        if not auth.may_use(cfg, sess, system):
-            return jsonify({
-                "error": "not_entitled",
-                "message": f"You are not entitled to work on {system or 'this system'}. "
-                           f"Ask a SOX administrator to add the Okta group that grants it.",
-                "systems": (sess or {}).get("systems", []),
-            }), 403
+    # Signing in is not being allowed to work on THIS system. Checked here as
+    # well as in the page, because a request can be made without the page.
+    who = current_user()
+    if not users.may_use(who, system):
+        return jsonify({
+            "error": "not_entitled",
+            "message": f"You are not assigned to {system or 'this system'}. "
+                       f"An administrator assigns systems under User Administration.",
+            "systems": (who or {}).get("scopes", []),
+        }), 403
 
     capture = CAPTURES.get((system.lower(), control_id.lower()))
     if capture is None:

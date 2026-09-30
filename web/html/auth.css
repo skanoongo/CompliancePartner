@@ -209,3 +209,54 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .authcard { padding: 24px 20px 22px; }
   .syslist { grid-template-columns: 1fr; }
 }
+
+/* ---- local sign-in ---- */
+
+.fieldlabel {
+  display: block;
+  margin-bottom: 6px;
+  font: 500 11px/1 "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.select {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface, #fff);
+  color: var(--ink);
+  font: inherit;
+}
+
+.select:focus-visible { outline: 3px solid #88a9ff; outline-offset: 2px; }
+
+.err {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border: 1px solid #efc9c9;
+  border-radius: 8px;
+  background: #fdecec;
+  color: #9c2b2b;
+  font-size: 13px;
+}
+
+.who-help { margin-top: 18px; font-size: 13px; }
+.who-help summary { cursor: pointer; color: var(--blue); }
+.who-help p { margin: 10px 0 0; color: var(--muted); }
+
+.who-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+
+.who-chip {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.who-chip:hover { border-color: #b9c8e8; }
