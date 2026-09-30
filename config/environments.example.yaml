@@ -51,6 +51,21 @@ environments:
       - CW Agentic
       - Development
 
+    # Where the change-management capture gets its recipe list. Without one of
+    # these the run stops before taking a screenshot, so the runner always sends
+    # one - falling back to the list compiled into the script, which it flags as
+    # possibly stale.
+    #
+    # config_csv wins where both are set. A Google Sheet needs a Google sign-in
+    # the first time, which nothing unattended can complete: run it once from a
+    # terminal or the browser session and the URL is remembered on the data
+    # volume, or use a CSV and skip the sign-in entirely.
+    #   config_csv: /config/workato-recipes.csv
+    #   config_sheet: https://docs.google.com/spreadsheets/d/.../edit
+    #
+    # Columns, one row per recipe:
+    #   Tab | Folder | Folder ID | Recipe ID | Recipe Name | Capture (Y/N) | Notes
+
   # ---------------------------------------------------------------- NetSuite
   netsuite:
     name: NetSuite

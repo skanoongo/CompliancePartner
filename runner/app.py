@@ -46,7 +46,8 @@ CAPTURES = {
     ("workato", "cm-02"): {
         "module": "workato.sox_capture",
         "control": "Change management",
-        "flags": ["out", "profile", "no-pause", "browser", "env", "settle", "workspace", "month"],
+        "flags": ["out", "profile", "no-pause", "browser", "env", "settle", "workspace",
+                  "month", "config"],
         # No "project": this capture is scoped by its config sheet's Capture(Y/N)
         # column now, not by a --project flag. Passing one made argparse reject
         # the whole run before it started.
@@ -623,6 +624,27 @@ def capabilities():
     })
 
 
+def _config_source(system):
+    """How this capture is told what to capture: CSV, sheet, or the built-in list.
+
+    Read from the environment's own config (Doppler, or the YAML), so it is set
+    in the same place as everything else about that system.
+    """
+    try:
+        cfg = environments.find(system) or {}
+    except environments.ConfigError:
+        cfg = {}
+    csv_path = str(cfg.get("config_csv") or os.environ.get("CAPTURE_CONFIG_CSV", "")).strip()
+    if csv_path:
+        return ["--config-csv", csv_path]
+    sheet = str(cfg.get("config_sheet") or os.environ.get("CAPTURE_CONFIG_SHEET", "")).strip()
+    if sheet:
+        return ["--config-sheet", sheet]
+    # Nothing configured. The built-in list keeps the run working rather than
+    # dying on a missing flag; the capture logs loudly that it may be stale.
+    return ["--use-builtin"]
+
+
 def _projects():
     """Workbook tabs the Workato change-management capture knows about.
 
@@ -789,6 +811,15 @@ def prepare():
         "profile": ["--profile", str(PROFILE_DIR if system.lower() == "workato"
                                      else DATA_DIR / f"{system.lower()}-profile")],
         "no-pause": ["--no-pause"],
+        # The change-management capture refuses to run without a recipe list, and
+        # exits before taking a single screenshot. It is the runner's job to
+        # supply one: a job started from the page cannot pass a flag.
+        #
+        # A Google Sheet is the intended source but needs a Google sign-in the
+        # first time, which nothing unattended can complete - so a CSV wins where
+        # one is configured, and the built-in list is the floor. The run says
+        # which it used either way.
+        "config": _config_source(system),
         # The image ships Playwright's Chromium, not Google Chrome. A capture
         # that defaults to real Chrome (sensible on a desktop) dies here with
         # "Chromium distribution 'chrome' is not found", so the container states

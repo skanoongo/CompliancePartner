@@ -168,7 +168,20 @@ FID_RE = re.compile(r"[?&]fid=(\d+)")
 SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
 GID_RE = re.compile(r"[#&?]gid=(\d+)")
 
-CONFIG_FILE = Path(__file__).with_name("sox_config.json")  # remembers --config-sheet between runs
+def _config_file():
+    """Where the remembered --config-sheet URL is kept.
+
+    On the data volume when there is one. It used to sit next to this script,
+    inside the image, so a rebuild silently forgot the sheet and the next run
+    died asking for a flag the operator had already supplied once.
+    """
+    data = Path(os.environ.get("CAPTURE_DATA_DIR", "/data"))
+    if data.is_dir():
+        return data / "sox_config.json"
+    return Path(__file__).with_name("sox_config.json")
+
+
+CONFIG_FILE = _config_file()
 
 
 # --------------------------------------------------------------------------- #
@@ -290,6 +303,12 @@ def load_config_from_sheet(page, url):
             if "accounts.google.com" in tab.url or "signin" in tab.url.lower():
                 tab.bring_to_front()
                 activate_browser()
+                if not interactive():
+                    raise SystemExit(
+                        "The config sheet needs a Google sign-in, and there is no terminal "
+                        "to wait on.\nOpen the browser session, sign in to Google so the "
+                        "sheet is visible, and run again - the sheet URL is remembered.\n"
+                        "Or avoid the sign-in entirely with --config-csv <file>.")
                 print("\n>> Google sign-in needed to read the config sheet. Sign in in the browser window,")
                 input("   wait until the sheet is visible, then press Enter here... ")
                 tab.goto(url, wait_until="domcontentloaded")
@@ -336,8 +355,15 @@ def load_config(args, page):
     if args.use_builtin:
         log("!! Using the BUILT-IN recipe list (--use-builtin). This list may be out of date.")
         return SECTIONS
-    sys.exit("No recipe list configured. Pass --config-sheet <Google Sheet URL> (remembered for later runs), "
-             "or --config-csv <file>, or --use-builtin to use the script's built-in list.")
+    sys.exit(
+        "No recipe list configured.\n"
+        "  --config-sheet <Google Sheet URL>   remembered for later runs; needs a Google\n"
+        "                                      sign-in the first time, so run it once from\n"
+        "                                      a terminal or the browser session\n"
+        "  --config-csv <file>                 no sign-in; the reliable choice unattended\n"
+        "  --use-builtin                       the list compiled into this script\n"
+        "\nStarted from the web page, the runner supplies one of these automatically - set\n"
+        "config_sheet or config_csv for the workato environment to choose which.")
 
 
 # --------------------------------------------------------------------------- #
