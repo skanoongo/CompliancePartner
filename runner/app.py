@@ -46,24 +46,31 @@ CAPTURES = {
     ("workato", "cm-02"): {
         "module": "workato.sox_capture",
         "control": "Change management",
-        "scope": ["workspace", "project"],
+        "flags": ["out", "profile", "no-pause", "browser", "settle", "workspace", "month"],
+        # No "project": this capture is scoped by its config sheet's Capture(Y/N)
+        # column now, not by a --project flag. Passing one made argparse reject
+        # the whole run before it started.
+        "scope": ["workspace"],
         "produces": ["Excel workbook", "screenshot manifest", "screenshots"],
     },
     ("workato", "ua-04"): {
         "module": "workato.uar_capture",
         "control": "User access review",
+        "flags": ["out", "profile", "no-pause", "browser", "env", "settle", "workspace", "period"],
         "scope": ["workspace", "period"],
         "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
     },
     ("netsuite", "ua-04"): {
         "module": "netsuite.uar_capture",
         "control": "User access review",
+        "flags": ["out", "profile", "no-pause", "browser", "env", "settle", "period"],
         "scope": ["period"],
         "produces": ["Excel workbook", "users.csv", "screenshot manifest", "screenshots"],
     },
     ("netsuite", "cm-02"): {
         "module": "netsuite.sox_capture",
         "control": "Change management",
+        "flags": ["out", "profile", "no-pause", "browser", "env", "settle", "period", "area"],
         "scope": ["period", "area"],
         "produces": ["Excel workbook", "changes.csv", "screenshot manifest", "screenshots"],
     },
@@ -449,10 +456,28 @@ def capabilities():
 
 
 def _projects():
-    """Projects the capture script knows about - one per workbook tab."""
-    from workato import sox_capture
+    """Workbook tabs the Workato change-management capture knows about.
 
-    return sox_capture.project_names()
+    Read defensively. That capture now takes its scope from a Google Sheet or a
+    CSV rather than a hardcoded list, and dropped the helper this used to call -
+    which turned /api/scope into a 500 and took the whole workspace page with it.
+    An endpoint that only lists choices should degrade to listing none.
+    """
+    try:
+        from workato import sox_capture
+    except Exception:
+        return []
+    fn = getattr(sox_capture, "project_names", None)
+    if callable(fn):
+        try:
+            return list(fn())
+        except Exception:
+            return []
+    # Fall back to the built-in sections the script still ships as its default.
+    try:
+        return [s["tab"] for s in getattr(sox_capture, "SECTIONS", []) if s.get("tab")]
+    except Exception:
+        return []
 
 
 def _workspaces(env_key="workato"):
@@ -581,30 +606,34 @@ def prepare():
     }
     _jobs[job_id] = job
 
-    cmd = [
-        "python3", "-m", capture["module"],
-        "--out", str(out),
+    # Build only the flags this capture actually accepts. argparse rejects the
+    # whole run on one unknown flag, so a capture that drops an option silently
+    # breaks every job started from the page - which is how --project, --env and
+    # a missing --month all reached production at once. "flags" in CAPTURES is
+    # the contract; anything not listed is never passed.
+    available = {
+        "out": ["--out", str(out)],
         # A profile per system: a shared one would mean two signed-in sessions in
         # the same browser, and a capture landing in the wrong system's tab.
-        "--profile", str(PROFILE_DIR if system.lower() == "workato"
-                         else DATA_DIR / f"{system.lower()}-profile"),
-        "--no-pause",
-        "--env", system.lower(),
-        "--settle", os.environ.get("CAPTURE_SETTLE", "4.0"),
-    ]
-    # A workspace is a Workato concept. NetSuite is scoped by account instead,
-    # which the capture reads from config, so passing it here would be a lie.
-    if "workspace" in capture["scope"]:
-        cmd += ["--workspace", workspace]
-    # Each capture takes the scope that means something to it. The change-management
-    # run is monthly and per-project; the access review is a point-in-time listing
-    # labelled with the review period.
-    if "project" in capture["scope"]:
-        cmd += ["--month", month, "--project", project]
-    if "period" in capture["scope"]:
-        cmd += ["--period", period]
-    if "area" in capture["scope"]:
-        cmd += ["--area", str(body.get("area", "")).strip() or "all"]
+        "profile": ["--profile", str(PROFILE_DIR if system.lower() == "workato"
+                                     else DATA_DIR / f"{system.lower()}-profile")],
+        "no-pause": ["--no-pause"],
+        # The image ships Playwright's Chromium, not Google Chrome. A capture
+        # that defaults to real Chrome (sensible on a desktop) dies here with
+        # "Chromium distribution 'chrome' is not found", so the container states
+        # which browser it actually has rather than relying on a default.
+        "browser": ["--browser", os.environ.get("CAPTURE_BROWSER", "chromium")],
+        "env": ["--env", system.lower()],
+        "settle": ["--settle", os.environ.get("CAPTURE_SETTLE", "4.0")],
+        "workspace": ["--workspace", workspace],
+        "month": ["--month", month],
+        "period": ["--period", period],
+        "project": ["--project", project],
+        "area": ["--area", str(body.get("area", "")).strip() or "all"],
+    }
+    cmd = ["python3", "-m", capture["module"]]
+    for flag in capture["flags"]:
+        cmd += available[flag]
     try:
         env_cfg = environments.find(system)
     except environments.ConfigError as exc:
