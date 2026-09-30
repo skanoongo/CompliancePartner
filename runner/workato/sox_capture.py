@@ -39,6 +39,7 @@ import csv
 import io
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -51,6 +52,16 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from PIL import Image
 from playwright.sync_api import sync_playwright
+
+# The screen layer is shared with every other capture in this repo, and it is
+# already macOS + Linux + Windows. Duplicating it here is how the two drift.
+from core.platform import (  # noqa: F401 - several are re-exported for this package
+    IS_LINUX, IS_MAC, IS_WINDOWS, WINDOW_OFFSET_Y,
+    clear_profile_lock, enter_pressed, grab_screen, interactive, log, now_stamp,
+    slug, workbook_copy,
+)
+from core.platform import activate_app as _core_activate
+from core.platform import screen_size as _core_screen_size
 
 BASE = "https://app.workato.com"
 
@@ -332,17 +343,8 @@ def load_config(args, page):
 # --------------------------------------------------------------------------- #
 # helpers                                                                      #
 # --------------------------------------------------------------------------- #
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def slug(s, n=40):
-    s = re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-")
-    return s[:n]
-
-
-def now_stamp():
-    return datetime.now().astimezone()
 
 
 def assets_url(fid):
@@ -354,16 +356,24 @@ def versions_url(rid):
 
 
 def screen_size():
-    """Main display size in points via AppleScript; fallback 1440x900."""
-    try:
-        out = subprocess.check_output(
-            ["osascript", "-e", 'tell application "Finder" to get bounds of window of desktop'],
-            text=True, timeout=10,
-        )
-        _, _, w, h = [int(x.strip()) for x in out.strip().split(",")]
-        return w, h
-    except Exception:
-        return 1440, 900
+    """Whole-screen size in points.
+
+    macOS reads it from the Finder as before. Everywhere else this deferred to a
+    1440x900 guess, which in the container silently sized the browser window to
+    less than the 1680x1050 display it was being photographed on - the shots came
+    out with a dead strip down the side and nobody would call that a failure.
+    """
+    if IS_MAC:
+        try:
+            out = subprocess.check_output(
+                ["osascript", "-e", 'tell application "Finder" to get bounds of window of desktop'],
+                text=True, timeout=10,
+            )
+            _, _, w, h = [int(x.strip()) for x in out.strip().split(",")]
+            return w, h
+        except Exception:
+            return 1440, 900
+    return _core_screen_size()
 
 
 BROWSER_PID = None  # set once the automated browser is running
@@ -373,6 +383,8 @@ def find_browser_pid(profile_dir):
     """PID of the browser we launched: the main (non-Helper) process whose command
     line carries our --user-data-dir. Lets us target *our* Chrome even when the
     user's regular Google Chrome is open at the same time."""
+    if IS_WINDOWS:
+        return None  # no ps(1); window activation goes by title instead
     marker = Path(profile_dir).name  # tolerant of path normalisation differences
     for _ in range(10):
         try:
@@ -394,6 +406,8 @@ def find_browser_pid(profile_dir):
 
 
 def frontmost_pid():
+    if not IS_MAC:
+        return None
     try:
         out = subprocess.check_output(
             ["osascript", "-e", 'tell application "System Events" to get unix id of first process whose frontmost is true'],
@@ -405,6 +419,8 @@ def frontmost_pid():
 
 def browser_window_id(pid):
     """CGWindowID of the largest normal-layer window owned by pid (via JXA + CoreGraphics)."""
+    if not IS_MAC:
+        return None
     if not pid:
         return None
     jxa = f"""
@@ -425,6 +441,14 @@ wins.length ? String(wins[0].kCGWindowNumber) : '';
 def activate_browser(app_name_fallback="Chrom"):
     """Bring the automated browser window to the front. Returns True only when the
     frontmost app afterwards really is our browser process."""
+    if not IS_MAC:
+        # There is no AppleScript and no CGWindow list off macOS. In the container
+        # Xvfb has no window manager and the browser is the only mapped window, so
+        # there is nothing to raise; on Windows the shared helper raises it by
+        # title. Report True because the browser IS what will be photographed -
+        # returning False here would make every shot look unverified.
+        _core_activate(app_name_fallback)
+        return True
     if BROWSER_PID:
         script = (
             'tell application "System Events"\n'
@@ -456,7 +480,34 @@ def activate_app(app_name):  # backwards-compatible alias
     activate_browser(app_name)
 
 
+def _activate_non_mac(app_name):
+    """Raise the browser on Linux/Windows via the shared implementation."""
+    _core_activate(app_name)
+
+
 MENU_BAR_POINTS = 26  # macOS menu bar height in points (captured at the display's scale factor)
+
+# How much to leave uncovered at the top of the screen, per platform. The point is
+# the same everywhere - the shot must contain a clock - but what provides it is
+# not: macOS has its menu bar, the container draws an xclock strip, and Windows
+# keeps its taskbar. Only macOS needs the strip STITCHED on afterwards, because
+# only there do we capture a single window rather than the whole screen.
+TOP_STRIP = MENU_BAR_POINTS if IS_MAC else WINDOW_OFFSET_Y
+
+
+def _sandbox_ok():
+    """Whether Chromium's sandbox can be left enabled.
+
+    Enabled is preferable: it keeps the "--no-sandbox is not supported" banner out
+    of the screenshots. As root on Linux, Chromium will not start at all with it
+    enabled, and a container runs as root.
+    """
+    if IS_LINUX:
+        try:
+            return os.geteuid() != 0
+        except AttributeError:
+            return True
+    return True
 
 
 def capture_menu_bar(screen_w):
@@ -473,6 +524,10 @@ def capture_menu_bar(screen_w):
 
 def stitch_with_menu_bar(path, screen_w):
     """Put the live Mac menu bar (clock) above the image at `path`."""
+    # Non-macOS captures are whole-screen, so the clock is already in them.
+    # Stitching a second copy on would be misleading, not helpful.
+    if not IS_MAC:
+        return
     top = capture_menu_bar(screen_w)
     if top is None:
         return
@@ -499,8 +554,28 @@ def looks_like_real_capture(path):
         return False
 
 
+_WINDOW_FALLBACK_SAID = False
+
+
 def capture_window(path, window_id, screen_w):
-    """Capture a specific window by CGWindowID and add the menu bar. Returns True on success."""
+    """Capture one window by CGWindowID and add the menu bar. True on success.
+
+    Capturing a single window by id is a macOS facility. On Linux and Windows the
+    whole screen is grabbed instead, which for evidence is equivalent or better -
+    it still carries the URL bar and the clock, and it cannot silently photograph
+    the wrong window. Said once per run rather than per screenshot.
+    """
+    if not IS_MAC:
+        global _WINDOW_FALLBACK_SAID
+        if not _WINDOW_FALLBACK_SAID:
+            log("  window-scoped capture is macOS-only; using whole-screen shots "
+                "(same URL bar, same clock)")
+            _WINDOW_FALLBACK_SAID = True
+        try:
+            grab_screen(path, 1)
+        except Exception:
+            return False
+        return looks_like_real_capture(path)
     try:
         subprocess.run(["screencapture", "-x", "-o", "-l", str(window_id), str(path)], check=True, timeout=30)
     except Exception:
@@ -519,53 +594,19 @@ def capture_page(path, page, screen_w):
 
 
 def mac_screencapture(path, display=1, window_id=None, screen_w=None):
-    """Raw whole-screen capture (Cmd+Shift+3 style). Only used with --capture-mode screen."""
-    subprocess.run(["screencapture", "-x", "-D", str(display), str(path)], check=True, timeout=30)
+    """Whole-screen capture (Cmd+Shift+3 style), on whichever platform this is.
+
+    Kept under its original name because the call sites read well, but it is no
+    longer macOS-only: screencapture there, the shared mss grab on Linux and
+    Windows.
+    """
+    if IS_MAC:
+        subprocess.run(["screencapture", "-x", "-D", str(display), str(path)],
+                       check=True, timeout=30)
+        return
+    grab_screen(path, display)
 
 
-def workbook_copy(src, dst_dir, scale=0.5):
-    """Half-size JPEG copy for the workbook (Retina PNGs are too heavy to embed 30x)."""
-    dst_dir.mkdir(exist_ok=True)
-    dst = dst_dir / (Path(src).stem + ".jpg")
-    img = Image.open(src).convert("RGB")
-    img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
-    img.save(dst, quality=85, optimize=True)
-    return str(dst)
-
-
-SCROLL_JS = """
-() => {
-  const els = [document.scrollingElement, ...document.querySelectorAll('*')];
-  let best = null;
-  for (const el of els) {
-    if (!el) continue;
-    const st = getComputedStyle(el);
-    const scrollable = el === document.scrollingElement || /(auto|scroll)/.test(st.overflowY);
-    if (scrollable && el.scrollHeight > el.clientHeight + 40 && el.clientHeight > 300) {
-      if (!best || el.clientHeight > best.clientHeight) best = el;
-    }
-  }
-  if (!best) return null;
-  best.setAttribute('data-sox-scroll', '1');
-  return {top: best.scrollTop, height: best.clientHeight, total: best.scrollHeight};
-}
-"""
-CONTENT_BOTTOM_JS = """
-() => {
-  // where does the real content (table rows / list items / recipe links) end, in viewport px?
-  const sel = 'tr, li, [role=row], [role=listitem], a[href*="/recipes/"], table, tbody';
-  let bottom = 0;
-  for (const el of document.querySelectorAll(sel)) {
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0 && r.bottom > bottom) bottom = r.bottom;
-  }
-  return {bottom: bottom, viewport: window.innerHeight};
-}
-"""
-SCROLL_BY_JS = """
-(dy) => { const el = document.querySelector('[data-sox-scroll]') || document.scrollingElement;
-          el.scrollTop += dy; return el.scrollTop; }
-"""
 
 
 # --------------------------------------------------------------------------- #
@@ -839,26 +880,100 @@ def looks_logged_in(page):
     return sum(m in txt for m in APP_UI_MARKERS) >= 2
 
 
-def enter_pressed():
-    """Non-blocking check for Enter in the terminal (macOS/Linux)."""
-    import select
-    r, _, _ = select.select([sys.stdin], [], [], 0)
-    if r:
-        sys.stdin.readline()
-        return True
-    return False
 
 
 def live_pages(ctx):
     return [p for p in ctx.pages if not p.is_closed()]
 
 
-def wait_for_login(ctx, page, timeout_s=600):
-    """Returns the page that is logged in (SSO may finish in a different tab), or None."""
+EMAIL_SELECTORS = (
+    "input[name='user[email]']", "input#user_email",
+    "input[type='email']", "input[name='username']", "input[name='email']",
+)
+PASSWORD_SELECTORS = (
+    "input[name='user[password]']", "input#user_password",
+    "input[type='password']", "input[name='password']",
+)
+SUBMIT_SELECTORS = (
+    "input[type='submit']", "button[type='submit']",
+    "button:has-text('Log in')", "button:has-text('Sign in')",
+)
+
+
+def _fill_first(page, selectors, value):
+    for sel in selectors:
+        try:
+            el = page.locator(sel).first
+            if el.count() and el.is_visible():
+                el.fill(value)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def try_form_login(page, username, password):
+    """Fill and submit the sign-in form. True once it was submitted.
+
+    Cannot complete an SSO redirect or an MFA challenge - nothing can without a
+    person - so the caller falls back to waiting for one.
+    """
+    if not username or not password:
+        return False
+    try:
+        page.goto(f"{BASE}/users/sign_in", wait_until="domcontentloaded")
+        time.sleep(2)
+        if not _fill_first(page, EMAIL_SELECTORS, username):
+            log("  no email field on the sign-in page - handing over to a person")
+            return False
+        if not _fill_first(page, PASSWORD_SELECTORS, password):
+            log("  no password field on the sign-in page - handing over to a person")
+            return False
+        for sel in SUBMIT_SELECTORS:
+            try:
+                el = page.locator(sel).first
+                if el.count() and el.is_visible():
+                    el.click()
+                    break
+            except Exception:
+                continue
+        else:
+            page.keyboard.press("Enter")
+        try:
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except Exception:
+            pass
+        time.sleep(3)
+        return True
+    except Exception as exc:
+        log(f"  form sign-in could not be attempted: {type(exc).__name__}")
+        return False
+
+
+def wait_for_login(ctx, page, timeout_s=600, username="", password="", mode="interactive"):
+    """Returns the page that is logged in (SSO may finish in a different tab), or None.
+
+    The credential arguments are part of the signature because the user access
+    review calls this with them. Dropping them made every UA-04 run fail with
+    "unexpected keyword argument" before it opened a page.
+    """
     page.goto(BASE, wait_until="domcontentloaded")
     time.sleep(3)
+
+    if mode == "form" and username and password and not looks_logged_in(page):
+        log(f"Attempting form sign-in as {username}")
+        if try_form_login(page, username, password):
+            # Workato's redirect chain can outlast a single check.
+            for _ in range(15):
+                if looks_logged_in(page):
+                    log(f"Signed in with the configured credentials. At {page.url}")
+                    return page
+                time.sleep(2)
+            log("Form sign-in did not complete - SSO or MFA needs a person.")
+
     start = time.time()
     last_print = 0
+    last_probe = time.time()
     activate_app("Chrom")
     while time.time() - start < timeout_s:
         pages = live_pages(ctx)
@@ -875,8 +990,26 @@ def wait_for_login(ctx, page, timeout_s=600):
             log("Waiting for login in the browser window (it may be behind this Terminal).")
             for p in pages:
                 log(f"   open tab: {p.url}")
-            log("   -> if you ARE logged in and see the Workato dashboard, press Enter here to continue.")
+            session = os.environ.get("CAPTURE_SESSION_URL", "")
+            if session:
+                log(f"   -> open {session} and sign in there.")
+            else:
+                log("   -> if you ARE logged in and see the Workato dashboard, press Enter here to continue.")
             last_print = time.time()
+
+        # A sign-in completed through redirects does not always leave the page
+        # object reflecting it; re-navigating settles that.
+        if time.time() - last_probe > 20:
+            last_probe = time.time()
+            try:
+                probe = pages[-1]
+                probe.goto(BASE, wait_until="domcontentloaded")
+                time.sleep(3)
+                if looks_logged_in(probe):
+                    return probe
+            except Exception:
+                pass
+
         if enter_pressed():
             log("Enter pressed - continuing with the most recently opened tab.")
             return pages[-1]
@@ -913,17 +1046,28 @@ def capture(args, out_dir):
     profile_dir = Path(args.profile).expanduser()
     profile_dir.mkdir(parents=True, exist_ok=True)
     sw, sh = screen_size()
+    # A Chromium killed without shutting down leaves SingletonLock in the profile
+    # and refuses to start next time, complaining that another process on another
+    # computer holds it. That reads like a concurrency bug; it is debris from a
+    # cancelled run or a container restart.
+    clear_profile_lock(profile_dir)
     app_name = "Chrom"  # substring match: Chromium / Google Chrome / Google Chrome for Testing
     with sync_playwright() as p:
         kwargs = dict(
             user_data_dir=str(profile_dir),
             headless=False,
             no_viewport=True,  # let the real window size drive the page
-            chromium_sandbox=True,  # avoids the "--no-sandbox unsupported flag" banner in screenshots
+            # Keeping the sandbox on avoids Chromium's "--no-sandbox is not
+            # supported" banner appearing in every screenshot, which matters when
+            # the screenshot is the evidence. But Chromium refuses to start as
+            # root with the sandbox enabled, and the container runs as root - so
+            # there it is the difference between shots with a banner and no shots
+            # at all.
+            chromium_sandbox=_sandbox_ok(),
             args=[
                 "--disable-blink-features=AutomationControlled",
-                f"--window-position=0,{MENU_BAR_POINTS}",
-                f"--window-size={sw},{sh - MENU_BAR_POINTS}",
+                f"--window-position=0,{TOP_STRIP}",
+                f"--window-size={sw},{sh - TOP_STRIP}",
             ],
         )
         if args.browser == "chrome":
@@ -937,7 +1081,10 @@ def capture(args, out_dir):
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.set_default_timeout(60000)
 
-        page = wait_for_login(ctx, page)
+        page = wait_for_login(ctx, page,
+                              username=getattr(args, "username", ""),
+                              password=getattr(args, "password", ""),
+                              mode=getattr(args, "login", "interactive"))
         if page is None:
             log("Login did not complete. Exiting.")
             try:
@@ -1061,7 +1208,11 @@ def main():
     ap.add_argument("--workspace", default="Production",
                     help="workspace name that must be visible on every page ('' to disable the check)")
     ap.add_argument("--display", type=int, default=1, help="display number for screencapture (1 = main)")
-    ap.add_argument("--capture-mode", choices=["window", "page", "screen"], default="window",
+    # "window" means capture-by-window-id, which only macOS can do. Defaulting to
+    # it elsewhere would take the fallback path on every single shot; "screen"
+    # gets there directly and is what the other platforms actually do.
+    ap.add_argument("--capture-mode", choices=["window", "page", "screen"],
+                    default="window" if IS_MAC else "screen",
                     help="window (default) = the script's browser window by window id + Mac menu bar (clock) "
                          "on top; falls back to 'page' if the window can't be captured. "
                          "page = page image from the browser engine + menu bar (always correct content, no URL bar). "
@@ -1074,6 +1225,8 @@ def main():
     ap.add_argument("--capture-only", action="store_true")
     ap.add_argument("--build-only", action="store_true", help="rebuild workbook from --out/manifest.json")
     ap.add_argument("--no-pause", action="store_true")
+    ap.add_argument("--env", default="workato",
+                    help="section in config/environments.yaml to sign in with")
     args = ap.parse_args()
 
     out_dir = Path(args.out) if args.out else Path(f"sox_{slug(args.month)}_{datetime.now().strftime('%Y%m%d-%H%M%S')}")
@@ -1086,6 +1239,26 @@ def main():
             sys.exit(f"No manifest at {manifest}; pass --out <folder from a previous run>")
         build_workbook(manifest, xlsx_path)
         return
+
+    # Credentials, if any are configured. No config at all is fine: the sign-in is
+    # then interactive, which is how this script worked before.
+    args.password = ""
+    args.login = "interactive"
+    try:
+        from core import environments
+
+        cfg = environments.find(args.env)
+        if cfg and cfg.get("enabled"):
+            args.username = cfg.get("username", "")
+            args.password = cfg.get("password", "")
+            args.login = cfg.get("login", "interactive")
+            log(f"Environment '{cfg['name']}': login={args.login}"
+                f"{', user=' + args.username if args.username else ''}")
+        else:
+            args.username = ""
+    except Exception as exc:
+        args.username = ""
+        log(f"!! environments.yaml could not be read ({exc}); signing in by hand.")
 
     manifest = capture(args, out_dir)
     if not args.capture_only:

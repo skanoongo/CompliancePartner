@@ -46,7 +46,7 @@ CAPTURES = {
     ("workato", "cm-02"): {
         "module": "workato.sox_capture",
         "control": "Change management",
-        "flags": ["out", "profile", "no-pause", "browser", "settle", "workspace", "month"],
+        "flags": ["out", "profile", "no-pause", "browser", "env", "settle", "workspace", "month"],
         # No "project": this capture is scoped by its config sheet's Capture(Y/N)
         # column now, not by a --project flag. Passing one made argparse reject
         # the whole run before it started.
