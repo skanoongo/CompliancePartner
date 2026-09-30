@@ -46,9 +46,22 @@ ROLE_MODULES = {
 }
 ROLES = list(ROLE_MODULES)
 
+# Every SOX system someone can be assigned to. Kept here rather than imported
+# from app.py so the directory does not depend on the web layer; app.py serves
+# this same list to the assignment UI.
+ALL_SYSTEMS = [
+    "1Password", "Argo", "Billing TSDB", "CoStar", "Coupa", "Data Lake", "Doppler",
+    "Equity Edge", "FloQast", "GitHub", "JPMorgan", "Kyriba", "Linux (OS)",
+    "NetSuite", "Okta", "Orderful", "Salesforce", "Snowflake", "Vanta",
+    "Wiz", "Workato", "Workday", "Zip", "Zuora",
+]
+
 # Seeded on first run so an empty directory never locks everyone out. These match
 # the names the page shipped with, so nothing appears to change on upgrade.
 SEED = [
+    # Bootstrap administrator. A fresh volume has to contain someone who can
+    # reach User Administration, or the directory is unmanageable from the UI.
+    {"id": "admin", "name": "admin", "role": "Admin", "scopes": ALL_SYSTEMS},
     {"id": "minh", "name": "Minh Nguyen", "role": "Admin", "scopes": []},
     {"id": "saloni", "name": "Saloni Palkar", "role": "Internal Audit User", "scopes": []},
     {"id": "spandana", "name": "Spandana Bolla", "role": "Control Preparer",
@@ -143,6 +156,20 @@ def upsert(entry):
         users = _read()
         if users is None:
             users = [dict(u) for u in SEED]
+
+        # Names must be unique, because in local mode the NAME is what someone
+        # signs in with. Two rows called "admin" under different ids would make
+        # which one you become arbitrary - and if their roles differ, so is what
+        # you may do. Dedup by id alone let that through.
+        clash = [u for u in users
+                 if str(u.get("name", "")).strip().lower() == name.strip().lower()
+                 and str(u.get("id", "")).lower() != uid]
+        if clash:
+            raise UserError(
+                f"the name {name!r} is already used by user id "
+                f"{clash[0].get('id')!r}; names are how people sign in, so they "
+                f"have to be unique")
+
         # Never remove the last administrator. Demoting the only Admin would leave
         # the directory with nobody able to grant access back.
         admins = [u for u in users if u.get("role") == "Admin"]

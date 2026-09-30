@@ -77,15 +77,9 @@ CAPTURES = {
     },
 }
 
-# Every SOX system a person can be assigned to. The page shows its own list for
-# the sidebar; this is the authoritative one the assignment UI and the entitlement
-# check both read, so "granted" and "runnable" cannot disagree.
-SOX_SYSTEMS = [
-    "1Password", "Argo", "Billing TSDB", "CoStar", "Coupa", "Data Lake", "Doppler",
-    "Equity Edge", "FloQast", "GitHub", "JPMorgan", "Kyriba", "Linux (OS)",
-    "NetSuite", "Okta", "Orderful", "Salesforce", "Snowflake", "Vanta",
-    "Wiz", "Workato", "Workday", "Zip", "Zuora",
-]
+# The one system inventory, owned by the directory. Two copies would let
+# "granted" and "assignable" drift apart without anything noticing.
+SOX_SYSTEMS = users.ALL_SYSTEMS
 
 app = Flask(__name__)
 
