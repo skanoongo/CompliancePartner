@@ -225,6 +225,7 @@ open http://cw_CompliancePartnercore.internal.coreweave.com/
 | `runner/entrypoint.sh` | builds the virtual desktop the capture photographs |
 | `docs/ARCHITECTURE.md` | why the runner carries a whole desktop, and how the pieces fit |
 | `docs/RUNBOOK.md` | running a monthly review, and what to do when one goes wrong |
+| `docs/WORKATO-FLOW.md` | the Workato flows as diagrams, for reviewers and sign-off |
 
 ### How the runner is laid out
 
