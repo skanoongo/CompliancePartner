@@ -493,6 +493,8 @@
   render = function () {
     protoRender();
     markLiveRows();
+    ensureSystemPicker();
+    syncSystemPicker();
   };
 
   // ------------------------------------------------------------------ startup
@@ -559,8 +561,10 @@
       swap(accessScopes, [...new Set([...INVENTORY.systems, ...extra])].sort());
     }
     // The sidebar shortlist: what this person may actually reach.
+    // `systems` still backs the page's own helpers, so keep it to what this
+    // person may reach - it is simply no longer drawn as a sidebar list.
     if (typeof systems !== 'undefined' && typeof visibleSystems === 'function') {
-      swap(systems, visibleSystems().slice(0, 9));
+      swap(systems, visibleSystems());
       if (!systems.includes(app.system) && systems.length) app.system = systems[0];
     }
   }
@@ -640,6 +644,59 @@
     render();
     toast(name + ' removed, and unassigned from anyone who had it.');
   };
+
+  // ------------------------------------------- choosing what to work on
+  //
+  // The sidebar listed every system in the inventory, which put a 24-item
+  // catalogue in front of someone entitled to two. What a person needs is the
+  // one they are working on now, so the choice moved next to their name and
+  // offers only what they are assigned.
+
+  function ensureSystemPicker() {
+    const right = document.querySelector('.topright');
+    if (!right || document.getElementById('cpSystemPick')) return;
+
+    const wrap = document.createElement('label');
+    wrap.className = 'cp-syspick';
+    wrap.htmlFor = 'cpSystemPick';
+    wrap.innerHTML = '<span class="cp-syspick-label">Working on</span>';
+
+    const sel = document.createElement('select');
+    sel.id = 'cpSystemPick';
+    sel.className = 'cp-syspick-select';
+    sel.addEventListener('change', () => {
+      if (typeof selectSystem === 'function') selectSystem(sel.value);
+      else { app.system = sel.value; render(); }
+    });
+    wrap.appendChild(sel);
+    right.insertBefore(wrap, right.firstChild);
+  }
+
+  function syncSystemPicker() {
+    const sel = document.getElementById('cpSystemPick');
+    if (!sel) return;
+    const mine = (typeof visibleSystems === 'function' ? visibleSystems() : []) || [];
+
+    if (!mine.length) {
+      sel.replaceChildren(new Option('No systems assigned', ''));
+      sel.disabled = true;
+      sel.title = 'An administrator assigns systems under User Administration';
+      return;
+    }
+    sel.disabled = false;
+    sel.title = mine.length + ' system' + (mine.length > 1 ? 's' : '') + ' assigned to you';
+
+    // Rebuild only when the set changed, so an open dropdown is not yanked shut.
+    const current = [...sel.options].map(o => o.value).join('\u0000');
+    if (current !== mine.join('\u0000')) {
+      sel.replaceChildren(...mine.map(s => new Option(s, s)));
+    }
+    if (!mine.includes(app.system)) {
+      app.system = mine[0];
+      if (typeof selectSystem === 'function') { /* caller re-renders */ }
+    }
+    sel.value = app.system;
+  }
 
   // ------------------------------------------------- identity from the server
   //

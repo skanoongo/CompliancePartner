@@ -260,3 +260,49 @@
   .cp-sysaddrow { flex-direction: column; }
   .cp-syslist { grid-template-columns: 1fr; }
 }
+
+/* ---- working-on picker, beside the signed-in name ------------------------- */
+/* The sidebar used to list the whole inventory. Someone entitled to two systems
+   does not need a 24-item catalogue; they need the one they are on now. */
+
+.cp-syspick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+}
+
+.cp-syspick-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cp-syspick-select {
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 6px;
+  max-width: 190px;
+  cursor: pointer;
+}
+
+.cp-syspick-select:disabled { color: var(--muted); cursor: not-allowed; font-weight: 500; }
+.cp-syspick-select:focus-visible { outline: 3px solid #88a9ff; outline-offset: 2px; border-radius: 6px; }
+
+/* The inventory list and its heading leave the sidebar. The page still keeps
+   them up to date; they are simply not the way anyone chooses a system now. */
+aside .asidehead,
+aside #systems { display: none !important; }
+
+@media (max-width: 1100px) { .cp-syspick-label { display: none; } }
+@media (max-width: 700px) { .cp-syspick-select { max-width: 130px; } }
