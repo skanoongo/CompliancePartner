@@ -476,16 +476,19 @@
     adminView = function () {
       const html = protoAdminView();
       const panel = systemsPanel();
+      // The directory is only readable by an admin, and only this view needs it.
+      if (!DIRECTORY.length) refreshDirectory().then(render);
       // adminView ends with the page footer. Appending put the inventory BELOW
       // it, which reads as something bolted on after the page had finished.
       // Insert before the trailing explanatory block instead, so it sits with
       // the other administration cards.
+      const both = assignmentPanel() + panel;
       const anchors = ['<details class="audit"', '<details', '<div class="footer"'];
       for (const a of anchors) {
         const i = html.lastIndexOf(a);
-        if (i > 0) return html.slice(0, i) + panel + html.slice(i);
+        if (i > 0) return html.slice(0, i) + both + html.slice(i);
       }
-      return html + panel;
+      return html + both;
     };
   }
 
@@ -574,6 +577,89 @@
       .then(({ ok, body }) => { if (ok) applyInventory(body); })
       .catch(() => {});
   }
+
+  // ---------------------------------------- assigning systems to people
+  //
+  // The page's Edit Access modal does have scopes, but it mixes the SOX systems
+  // into one 41-item list with audit process scopes, so assigning someone two
+  // systems means finding them among things that are not systems at all. This
+  // does the one job plainly, and writes straight to the directory.
+  let DIRECTORY = [];
+
+  function refreshDirectory() {
+    return api('/api/users')
+      .then(({ ok, body }) => { if (ok && body.users) DIRECTORY = body.users; })
+      .catch(() => {});
+  }
+
+  function assignmentPanel() {
+    if (!DIRECTORY.length) {
+      return `<section class="card cp-assign"><div class="cardhead"><div>
+          <h2>SOX system assignment</h2>
+          <div class="sub">Loading the directory…</div></div></div></section>`;
+    }
+
+    const rows = DIRECTORY.map(u => {
+      if (u.admin) {
+        return `<tr>
+            <td><strong>${esc(u.name)}</strong><small>${esc(u.role)}</small></td>
+            <td class="cp-allsys">Every system, because the role is ${esc(u.role)}.
+              Change the role to assign individually.</td>
+          </tr>`;
+      }
+      const have = new Set((u.scopes || []).map(x => x.toLowerCase()));
+      const chips = INVENTORY.systems.map(name => {
+        const on = have.has(name.toLowerCase());
+        return `<button type="button" class="cp-chip ${on ? 'on' : ''}"
+                   data-uid="${esc(u.id)}" data-system="${esc(name)}"
+                   aria-pressed="${on}">${esc(name)}</button>`;
+      }).join('');
+      return `<tr>
+          <td><strong>${esc(u.name)}</strong><small>${esc(u.role)}</small></td>
+          <td><div class="cp-chips">${chips}</div>
+              <div class="cp-count">${(u.scopes || []).length} assigned</div></td>
+        </tr>`;
+    }).join('');
+
+    return `<section class="card cp-assign">
+        <div class="cardhead"><div>
+          <h2>SOX system assignment</h2>
+          <div class="sub">Click a system to assign or remove it. Saved immediately;
+            the person sees it in their Working on list next time they load the page.</div>
+        </div></div>
+        <div class="pad"><table class="cp-assigntable"><tbody>${rows}</tbody></table></div>
+      </section>`;
+  }
+
+  // Delegated once: the panel is rebuilt on every render, so per-button
+  // listeners would be re-attached (or leak) each time.
+  document.addEventListener('click', async (ev) => {
+    const chip = ev.target.closest && ev.target.closest('.cp-assign .cp-chip');
+    if (!chip) return;
+    ev.preventDefault();
+    const uid = chip.dataset.uid;
+    const system = chip.dataset.system;
+    const user = DIRECTORY.find(u => u.id === uid);
+    if (!user) return;
+
+    const have = (user.scopes || []).slice();
+    const at = have.findIndex(x => x.toLowerCase() === system.toLowerCase());
+    if (at >= 0) have.splice(at, 1); else have.push(system);
+
+    chip.disabled = true;
+    const { ok, body } = await api('/api/users/' + encodeURIComponent(uid), {
+      method: 'PUT',
+      body: JSON.stringify({ name: user.name, role: user.role, scopes: have })
+    });
+    chip.disabled = false;
+    if (!ok) {
+      toast((body && body.message) || 'That assignment was not saved.');
+      return;
+    }
+    user.scopes = body.user.scopes;
+    render();
+    toast(`${user.name}: ${at >= 0 ? 'removed' : 'assigned'} ${system}`);
+  });
 
   function systemsPanel() {
     const wired = new Set(INVENTORY.wired.map(w => w.toLowerCase()));
