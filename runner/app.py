@@ -618,6 +618,64 @@ def capabilities():
     })
 
 
+def _flag_args(key, system="workato"):
+    """The actual argv a flags key expands to. One place, so the builder and the
+    contract check below cannot disagree about what gets passed."""
+    return {
+        "out": ["--out", "<out>"],
+        "profile": ["--profile", "<profile>"],
+        "no-pause": ["--no-pause"],
+        "browser": ["--browser", "chromium"],
+        "env": ["--env", system.lower()],
+        "settle": ["--settle", "4.0"],
+        "workspace": ["--workspace", "<ws>"],
+        "month": ["--month", "<month>"],
+        "period": ["--period", "<period>"],
+        "project": ["--project", "all"],
+        "area": ["--area", "all"],
+        "config": _config_source(system),
+    }[key]
+
+
+def validate_flag_contracts():
+    """Check every flag a capture will be sent is one its argparse accepts.
+
+    argparse rejects the whole run on a single unknown flag, so a capture that
+    drops an option breaks every job started from the page - which has happened
+    three times here (--project, --env, then a missing recipe list). This checks
+    the EXPANDED argv rather than the flags keys: an earlier version compared the
+    keys themselves and reported "config" as unknown, which is a guard nobody
+    would keep listening to.
+    """
+    import ast
+    import importlib
+
+    problems = []
+    for (system, cid), cap in CAPTURES.items():
+        try:
+            mod = importlib.import_module(cap["module"])
+            tree = ast.parse(Path(mod.__file__).read_text())
+        except Exception as exc:                     # noqa: BLE001
+            problems.append(f"{system}/{cid}: cannot inspect {cap['module']}: {exc}")
+            continue
+        accepted = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "add_argument":
+                for a in node.args:
+                    if isinstance(a, ast.Constant) and str(a.value).startswith("--"):
+                        accepted.add(str(a.value))
+        sent = []
+        for key in cap["flags"]:
+            try:
+                sent += _flag_args(key, system)
+            except KeyError:
+                problems.append(f"{system}/{cid}: flags lists {key!r}, which is not a known key")
+        unknown = sorted({a for a in sent if a.startswith("--")} - accepted)
+        if unknown:
+            problems.append(f"{system}/{cid}: {cap['module']} does not accept {unknown}")
+    return problems
+
+
 def _config_source(system):
     """How this capture is told what to capture: CSV, sheet, or the built-in list.
 
@@ -902,6 +960,8 @@ def session_reset():
 
 if __name__ == "__main__":
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    for problem in validate_flag_contracts():
+        print(f"!! flag contract: {problem}", flush=True)
     from waitress import serve
 
     port = int(os.environ.get("PORT", "8000"))
