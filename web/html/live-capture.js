@@ -270,18 +270,17 @@
             <select id="cpWorkspace" class="select" onchange="cpSetWorkspace(this.value)">${wsOpts}</select>
           </div>
           <div>
-            <label class="fieldlabel" for="${needsProject ? 'cpProject' : 'cpPeriod'}">${needsProject ? 'Project' : 'Review period'}</label>
+            <label class="fieldlabel" for="${needsProject ? 'cpProject' : 'cpPeriodShown'}">${needsProject ? 'Project' : 'Review period'}</label>
             ${needsProject
               ? `<select id="cpProject" class="select" onchange="cpSetProject(this.value)">${prOpts}</select>`
-              : `<input id="cpPeriod" class="select" value="${esc(app.period)}" readonly
-                        aria-describedby="cpPeriodHint" title="Set with the Period selector at the top of the page">`}
+              : `<output id="cpPeriodShown" class="cp-periodout">${esc(chosenPeriod())}</output>`}
           </div>
         </div>
         <p class="sub" id="cpPeriodHint">The capture confirms the workspace is visible on every page
         before it reads anything, and stops rather than collect evidence from a different one.
         ${needsProject
           ? 'Only the chosen project gets a tab in the workbook, so a scoped run cannot be read as &ldquo;nothing changed&rdquo; elsewhere.'
-          : 'The review period comes from the Period selector at the top of the page. The collaborator list is a point-in-time snapshot labelled with it - Workato publishes no historical roster.'}</p>
+          : 'The review period is the one set in Preparation Period above, shown here so there is no doubt which period a run will be labelled with. The listing is a point-in-time snapshot - Workato publishes no historical roster.'}</p>
         <div class="actions">
           <button class="btn primary" onclick="startPrepare()">Prepare workpaper</button>
         </div>
@@ -352,6 +351,8 @@
 
     const r = rec();
     if (r.stage !== 'idle') return;
+    // Let the prototype's own validation speak: it toasts and returns.
+    if (!periodIsValid()) return protoStartPrepare();
     const k = key();
 
     r.stage = 'preparing';
@@ -364,7 +365,7 @@
       body: JSON.stringify({
         system: app.system,
         controlId: controls[app.control].id,
-        period: app.period,
+        period: chosenPeriod(),
         month: captureMonth(),
         workspace: chosen.workspace || SCOPE.defaultWorkspace,
         project: chosen.project || 'all'
@@ -388,13 +389,40 @@
     poll(k, body.id);
   };
 
-  // CM-02 is a MONTHLY control, and the capture labels its workbook and sheet
-  // headers with a month. The page's period selector is quarterly, and mapping a
-  // quarter onto a month would mean guessing a fiscal calendar - so the run is
-  // labelled with the current month and the chosen period is recorded alongside
-  // it on the job. To capture a different month, use the CLI:
-  //   docker compose run --rm runner capture --month "August 2026"
+  // The page now configures a real period per control - a quarter+year for the
+  // access review, a start/end pair for change management - so use that instead
+  // of app.period, which is only the initial default.
+  function chosenPeriod() {
+    try {
+      if (typeof periodLabel === 'function') return periodLabel();
+    } catch (e) { /* fall through */ }
+    return app.period || '';
+  }
+
+  // Mirrors the prototype's own guard in startPrepare. A live run must not be
+  // easier to start than a simulated one: beginning a capture with no period
+  // would produce a workbook nobody could file against a review.
+  function periodIsValid() {
+    if (typeof periodConfig !== 'function') return true;
+    let p;
+    try { p = periodConfig(); } catch (e) { return true; }
+    if (app.control === 0) return !!p.year && +p.year >= 2020 && +p.year <= 2100;
+    if (app.control === 1) return !!p.start && !!p.end && !(p.end < p.start);
+    return !!p.asof;
+  }
+
+  // CM-02 is monthly and the capture labels its workbook with a month. Derive it
+  // from the chosen start date where there is one rather than guessing.
   function captureMonth() {
+    try {
+      if (typeof periodConfig === 'function') {
+        const p = periodConfig();
+        const d = p && p.start ? new Date(p.start) : null;
+        if (d && !isNaN(d)) {
+          return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+        }
+      }
+    } catch (e) { /* fall through */ }
     return new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
   }
 
@@ -415,19 +443,29 @@
 
   // ------------------------------------------------------- badge on live rows
 
-  // Badge every control row that is backed by a real capture, not just the
-  // selected one - the point is to show at a glance which of the three are real.
+  // Badge every control that is backed by a real capture, not just the selected
+  // one - the point is to show at a glance which are real and which simulate.
+  //
+  // Found by text rather than by class: this used to look for ".row .meta",
+  // which the page no longer uses, so the badges silently stopped appearing
+  // while everything else still worked. Matching the control id where it is
+  // actually written survives the next restyle too.
   function markLiveRows() {
     if (app.tab !== 'prepare') return;
-    document.querySelectorAll('#workspace .row').forEach(row => {
-      const meta = row.querySelector('.meta');
-      if (!meta || meta.querySelector('.cp-badge')) return;
-      const control = controls.find(c => meta.textContent.includes(c.id));
+    const ws = document.getElementById('workspace');
+    if (!ws) return;
+    ws.querySelectorAll('*').forEach(el => {
+      if (el.children.length || el.querySelector('.cp-badge')) return;
+      const text = (el.textContent || '').trim();
+      // The control's own entry starts with its id ("UA-04 · Quarterly").
+      // Elsewhere the id appears mid-sentence ("Selected Control · UA-04"),
+      // which is a label, not a row to badge.
+      const control = controls.find(c => text.startsWith(c.id));
       if (!control || !liveFor(app.system, control.id)) return;
       const b = document.createElement('span');
       b.className = 'cp-badge';
       b.textContent = 'Live capture';
-      meta.appendChild(b);
+      el.appendChild(b);
     });
   }
 
@@ -448,17 +486,16 @@
   function applyIdentity(me) {
     if (!me || !me.authRequired) return;
 
-    const entitled = me.admin ? systems.slice() : (me.systems || []);
-    if (entitled.length) {
-      // Replace the sidebar list with what this person may work on.
-      systems.length = 0;
-      entitled.forEach(s => systems.push(s));
-      if (!systems.includes(app.system)) app.system = systems[0];
-    }
-
+    // The page now has its own visibility model (visibleSystems(), scopes per
+    // demo user), so rewriting the sidebar list here would put two systems of
+    // entitlement in conflict and neither would be trustworthy. Okta decides
+    // what /api/prepare will ALLOW - which it re-checks server-side on every
+    // run - and the page decides what it shows.
     const wanted = new URLSearchParams(location.search).get('system');
-    if (wanted && systems.some(s => s.toLowerCase() === wanted.toLowerCase())) {
-      app.system = systems.find(s => s.toLowerCase() === wanted.toLowerCase());
+    if (wanted) {
+      const pool = (typeof visibleSystems === 'function' ? visibleSystems() : systems) || systems;
+      const hit = pool.find(s => s.toLowerCase() === wanted.toLowerCase());
+      if (hit) app.system = hit;
     }
 
     const right = document.querySelector('.topright');
