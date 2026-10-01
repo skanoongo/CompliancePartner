@@ -460,3 +460,55 @@ aside #systems { display: none !important; }
 }
 .cp-chip-x:hover { opacity: 1; }
 .cp-chip-x:focus-visible { outline: 2px solid #88a9ff; outline-offset: 2px; border-radius: 4px; }
+
+/* ---- Need Help? ----------------------------------------------------------- */
+
+.cp-help {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 10px 7px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+
+.cp-help:hover { border-color: #b9c8e8; box-shadow: 0 2px 12px #1e315514; }
+.cp-help:active { transform: translateY(1px); }
+.cp-help:focus-visible { outline: 3px solid #88a9ff; outline-offset: 2px; }
+
+.cp-help-icon {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;          /* the source is a square crop of a round badge */
+  object-fit: cover;
+  /* A still image, so the motion is the page's: a slow breath, plus a halo that
+     pulses with it. Small and off to the side, so it reads as available rather
+     than as something demanding attention. */
+  animation: cp-help-breathe 3.6s ease-in-out infinite;
+}
+
+@keyframes cp-help-breathe {
+  0%, 100% { transform: scale(1);     box-shadow: 0 0 0 0 rgba(47, 95, 208, .34); }
+  50%      { transform: scale(1.06);  box-shadow: 0 0 0 6px rgba(47, 95, 208, 0); }
+}
+
+.cp-help:hover .cp-help-icon { animation-duration: 1.8s; }
+
+.cp-help-text { flex: 1; min-width: 0; }
+
+/* Motion is decoration here; the button works identically without it. */
+@media (prefers-reduced-motion: reduce) {
+  .cp-help-icon { animation: none; }
+  .cp-help { transition: none; }
+}
