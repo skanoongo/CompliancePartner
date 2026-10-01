@@ -25,8 +25,12 @@ sox_*/
 *.xlsx
 manifest.json
 screenshots.zip
+# Capture output is screenshots; those must never be committed. UI artwork that
+# the page actually serves must be - a deploy from a fresh clone would otherwise
+# render a broken image.
 *.png
 !docs/**/*.png
+!web/html/*.png
 
 # Browser profile - holds a live Workato session cookie.
 browser-profile/

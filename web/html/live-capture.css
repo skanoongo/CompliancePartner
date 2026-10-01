@@ -512,3 +512,15 @@ aside #systems { display: none !important; }
   .cp-help-icon { animation: none; }
   .cp-help { transition: none; }
 }
+
+/* Resetting throws the user's work away, so it is no longer the first thing the
+   sidebar offers - but it must still be reachable, and removing the only way to
+   call it left it dead code. */
+.cp-reset {
+  display: block;
+  margin-top: 10px;
+  padding-left: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.cp-reset:hover { color: var(--ink); text-decoration: underline; }
