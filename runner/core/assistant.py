@@ -311,6 +311,17 @@ def _trim(text, limit=900):
     return cut.strip() + " ..."
 
 
+# What answered. Reported on every reply, because "the guide said so" and "a
+# model wrote this from the guide" are different claims and a reader checking a
+# control needs to know which one they are looking at.
+GUIDE_ENGINE = "guide retrieval"
+
+
+def _engine(model=None):
+    return {"engine": "claude" if model else "guide",
+            "model": model or GUIDE_ENGINE}
+
+
 def _source(c):
     return {"doc": c["doc"], "heading": c["heading"],
             "question": c.get("question", "")}
@@ -326,8 +337,8 @@ def _extractive(question, hits, coverage):
         body = best["text"]
     else:
         body = _trim(best["text"])
-    return {"answer": body, "sources": [_source(c) for c in hits[:3]],
-            "mode": "guide", "confidence": round(coverage, 2)}
+    return dict({"answer": body, "sources": [_source(c) for c in hits[:3]],
+                 "mode": "guide", "confidence": round(coverage, 2)}, **_engine())
 
 
 # ------------------------------------------------------------- optional model
@@ -379,18 +390,67 @@ def _llm(question, hits, key):
 
 # ------------------------------------------------------------------ the entry
 
+DEFAULT_INTRO = ("Ask about preparing controls, monitoring, audit testing or "
+                 "access. Answers come from the Compliance Partner guide.")
+
+
+def _intro(chunks):
+    """The opening line, taken from the guide's own description of itself.
+
+    Hardcoding it in the page meant two descriptions of the product that could
+    drift apart, and the one in the chat was the one nobody would notice was
+    stale.
+    """
+    for c in chunks:
+        if c["faq"] or c.get("row"):
+            continue
+        if "what is" not in c["heading"].lower():
+            continue
+        for para in c["text"].split("\n\n"):
+            para = " ".join(para.split())
+            if len(para) > 60 and not para.startswith(("|", ">", "-", "#")):
+                return re.sub(r"[*`]", "", para)
+    return DEFAULT_INTRO
+
+
+def starters(limit=4):
+    """Opening questions, taken from the guide's FAQ.
+
+    These are the questions the guide's authors expected to be asked, phrased
+    the way they expected them - better suggestions than anything invented in
+    the page, and they follow the docs when the docs change. Spread across the
+    list rather than taken from the front, so they do not all land in one module.
+    """
+    chunks = index()["chunks"]
+    qs = [c["question"] for c in chunks
+          if c.get("faq") and 12 <= len(c.get("question", "")) <= 74]
+    seen, uniq = set(), []
+    for q in qs:
+        k = q.lower()
+        if k not in seen:
+            seen.add(k); uniq.append(q)
+    if len(uniq) <= limit:
+        return uniq
+    step = len(uniq) / limit
+    return [uniq[int(i * step)] for i in range(limit)]
+
+
 def configured():
     idx = index()
+    model = MODEL if _api_key() else None
     return {"docs": sorted({c["doc"] for c in idx["chunks"]}),
             "sections": len(idx["chunks"]),
-            "model": MODEL if _api_key() else None}
+            "model": model or GUIDE_ENGINE,
+            "engine": "claude" if model else "guide",
+            "intro": _intro(idx["chunks"]),
+            "starters": starters()}
 
 
 def ask(question):
     question = (question or "").strip()
     if not question:
-        return {"answer": "Ask me anything about Compliance Partner.",
-                "sources": [], "mode": "empty", "confidence": 0.0}
+        return dict({"answer": "Ask me anything about Compliance Partner.",
+                     "sources": [], "mode": "empty", "confidence": 0.0}, **_engine())
     if len(question) > 500:
         question = question[:500]
 
@@ -398,16 +458,19 @@ def ask(question):
     # Below this the best section shares almost nothing with the question, and
     # answering from it would be answering a question nobody asked.
     if not hits or coverage < 0.34:
-        return {"answer": NO_ANSWER, "sources": [_source(c) for c in hits[:2]],
-                "mode": "unknown", "confidence": round(coverage, 2)}
+        # Refusal comes from the retrieval score, so it is the guide's verdict
+        # even when a model is configured - the model is never asked.
+        return dict({"answer": NO_ANSWER, "sources": [_source(c) for c in hits[:2]],
+                     "mode": "unknown", "confidence": round(coverage, 2)}, **_engine())
 
     key = _api_key()
     if key:
         try:
             text = _llm(question, hits, key)
             if text:
-                return {"answer": text, "sources": [_source(c) for c in hits[:3]],
-                        "mode": "claude", "confidence": round(coverage, 2)}
+                return dict({"answer": text, "sources": [_source(c) for c in hits[:3]],
+                             "mode": "claude", "confidence": round(coverage, 2)},
+                            **_engine(MODEL))
         except Exception:                  # noqa: BLE001 - fall back, never fail
             pass
     return _extractive(question, hits, coverage)

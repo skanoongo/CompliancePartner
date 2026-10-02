@@ -932,12 +932,22 @@
   let ASSIST = null;                 // null until /api/ask reports in
   const history = [];                // this page session only; nothing is stored
 
-  const STARTERS = [
-    'How do I prepare a User Access Review?',
-    'When is my UAR due?',
-    'What does LIVE CAPTURE mean?',
-    'Why can I not see a system?'
+  // The opening screen is the guide's, not the page's: /api/ask serves an intro
+  // taken from the guide's description of itself and starter questions taken
+  // from its FAQ, so both follow the docs instead of drifting from them. These
+  // are only the fallback for a runner that answered without them.
+  const FALLBACK_INTRO = 'Ask about preparing controls, monitoring, audit '
+    + 'testing or access. Answers come from the Compliance Partner guide.';
+  const FALLBACK_STARTERS = [
+    'How do I log in?', 'When is my UAR due?', 'What does LIVE CAPTURE mean?'
   ];
+  const starters = () => (ASSIST && ASSIST.starters && ASSIST.starters.length)
+    ? ASSIST.starters : FALLBACK_STARTERS;
+  const intro = () => (ASSIST && ASSIST.intro) ? ASSIST.intro : FALLBACK_INTRO;
+
+  // What answered, named on every reply. "guide retrieval" and a model id are
+  // different claims about where the words came from.
+  const engineOf = (t) => t.model || (ASSIST && ASSIST.model) || '';
 
   // The guide is markdown. Escape first, then re-introduce only the few marks it
   // actually uses - anything else stays visible as text rather than as markup.
@@ -985,9 +995,19 @@
       const label = sourceName(s);
       if (label && !seen.includes(label)) seen.push(label);
     }
-    if (!seen.length) return '';
-    // Shown on every answer so a reader can check it against the guide itself.
-    return `<div class="cp-chat-src">From ${seen.slice(0, 2).map(esc).join(' &middot; ')}</div>`;
+    return seen.slice(0, 2);
+  }
+
+  // Shown on every answer: the sections a reader can check it against, and what
+  // turned them into this reply.
+  function footer(turn) {
+    const bits = [];
+    const names = sourceLine(turn.sources);
+    if (names && names.length) bits.push('From ' + names.map(esc).join(' &middot; '));
+    const eng = engineOf(turn);
+    if (eng) bits.push(esc(eng));
+    if (!bits.length) return '';
+    return `<div class="cp-chat-src">${bits.join(' &middot; ')}</div>`;
   }
 
   function panelHTML() {
@@ -1017,10 +1037,10 @@
     let html = '';
     if (!history.length) {
       html += `<div class="cp-chat-intro">
-                 <p>Ask me about preparing controls, monitoring, audit testing or access.
-                    I answer from the Compliance Partner guide and say so when something
-                    is not in it.</p>
-                 <div class="cp-chat-starters">${STARTERS.map(
+                 <p>${esc(intro())}</p>
+                 <p class="cp-chat-hint">I answer from the guide and say so when
+                    something is not in it.</p>
+                 <div class="cp-chat-starters">${starters().map(
                      q => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
                </div>`;
     }
@@ -1033,7 +1053,7 @@
       } else {
         const unknown = turn.mode === 'unknown' || turn.mode === 'error';
         html += `<div class="cp-turn bot"><div class="cp-bub ${unknown ? 'cp-unknown' : ''}">
-                   ${fmt(turn.text)}${unknown ? '' : sourceLine(turn.sources)}</div></div>`;
+                   ${fmt(turn.text)}${footer(turn)}</div></div>`;
       }
     }
     log.innerHTML = html;
@@ -1061,7 +1081,7 @@
       sources: [], mode: 'error'
     };
     history[i] = { role: 'bot', text: answer.answer, sources: answer.sources,
-                   mode: answer.mode };
+                   mode: answer.mode, model: answer.model, engine: answer.engine };
     draw();
     const input = document.getElementById('cpChatInput');
     if (input) input.focus();
@@ -1092,9 +1112,11 @@
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
     };
-    if (ASSIST && ASSIST.model) {
-      const m = el.querySelector('#cpChatMode');
-      if (m) m.textContent = 'Answers from the guide, written by ' + ASSIST.model;
+    const mode = el.querySelector('#cpChatMode');
+    if (mode && ASSIST) {
+      mode.textContent = ASSIST.engine === 'claude'
+        ? 'From the guide, written by ' + ASSIST.model
+        : 'Answers from the guide';
     }
     return el;
   }

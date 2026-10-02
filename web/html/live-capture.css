@@ -563,7 +563,8 @@ aside #systems { display: none !important; }
   color: var(--ink);
 }
 
-.cp-chat-intro p { margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+.cp-chat-intro p { margin: 0 0 8px; color: var(--ink); font-size: 12.5px; }
+.cp-chat-intro .cp-chat-hint { color: var(--muted); margin-bottom: 10px; }
 .cp-chat-starters { display: flex; flex-direction: column; gap: 6px; }
 .cp-chat-starters button {
   text-align: left;

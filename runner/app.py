@@ -420,6 +420,7 @@ def api_ask():
             "answer": "The guide could not be searched just now. "
                       "Try again, or ask a Compliance Partner administrator.",
             "sources": [], "mode": "error", "confidence": 0.0,
+            "engine": "guide", "model": assistant.GUIDE_ENGINE,
         })
 
 
