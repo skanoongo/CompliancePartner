@@ -918,4 +918,217 @@
       render();
     })
     .catch(() => { /* no runner: the page stays a prototype */ });
+  // ------------------------------------------------------------- help assistant
+  //
+  // The sidebar owl opens a chat panel that answers from docs/. The answering is
+  // done by the runner (/api/ask), not here, and by default it is retrieval over
+  // the guide rather than a generative model - see runner/core/assistant.py for
+  // why that is the default for a tool people consult about SOX controls.
+  //
+  // Everything degrades: no runner, or an assistant with no docs indexed, and the
+  // button falls back to the prototype's own guide modal instead of opening a
+  // chat that cannot answer.
+
+  let ASSIST = null;                 // null until /api/ask reports in
+  const history = [];                // this page session only; nothing is stored
+
+  const STARTERS = [
+    'How do I prepare a User Access Review?',
+    'When is my UAR due?',
+    'What does LIVE CAPTURE mean?',
+    'Why can I not see a system?'
+  ];
+
+  // The guide is markdown. Escape first, then re-introduce only the few marks it
+  // actually uses - anything else stays visible as text rather than as markup.
+  function fmt(s) {
+    let h = String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+    h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+    h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/(https?:\/\/[^\s<)]+)/g,
+                  '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    const lines = h.split('\n');
+    let out = '', list = null;
+    for (const raw of lines) {
+      const line = raw.trim();
+      const bullet = /^[-*]\s+(.*)$/.exec(line);
+      const number = /^\d+[.)]\s+(.*)$/.exec(line);
+      const want = bullet ? 'ul' : number ? 'ol' : null;
+      if (want) {
+        if (list !== want) { if (list) out += `</${list}>`; out += `<${want}>`; list = want; }
+        out += `<li>${(bullet || number)[1]}</li>`;
+        continue;
+      }
+      if (list) { out += `</${list}>`; list = null; }
+      if (line) out += `<p>${line}</p>`;
+    }
+    if (list) out += `</${list}>`;
+    return out || '<p></p>';
+  }
+
+  // "Compliance Partner > 11. FAQ (for chatbot retrieval)" is a path through the
+  // file, not a place a reader can look. Show the section as a person would name
+  // it: the deepest heading, without its numbering or editorial aside.
+  function sourceName(s) {
+    const last = String(s.heading || s.doc || '').split('>').pop().trim();
+    return last.replace(/^\d+(\.\d+)*[.)]?\s*/, '')
+               .replace(/\s*\([^)]*\)\s*$/, '')
+               .trim() || (s.doc || '');
+  }
+
+  function sourceLine(sources) {
+    if (!sources || !sources.length) return '';
+    const seen = [];
+    for (const s of sources) {
+      const label = sourceName(s);
+      if (label && !seen.includes(label)) seen.push(label);
+    }
+    if (!seen.length) return '';
+    // Shown on every answer so a reader can check it against the guide itself.
+    return `<div class="cp-chat-src">From ${seen.slice(0, 2).map(esc).join(' &middot; ')}</div>`;
+  }
+
+  function panelHTML() {
+    return `
+      <div class="cp-chat-head">
+        <img class="cp-chat-avatar" src="help-icon.png?v=owl" alt="" width="28" height="28">
+        <div class="cp-chat-who">
+          <strong>Compliance Partner help</strong>
+          <small id="cpChatMode">Answers from the guide</small>
+        </div>
+        <button class="cp-chat-x" aria-label="Close help">&times;</button>
+      </div>
+      <div class="cp-chat-log" id="cpChatLog" role="log" aria-live="polite" aria-atomic="false"></div>
+      <form class="cp-chat-form" id="cpChatForm">
+        <label class="cp-sr" for="cpChatInput">Ask about Compliance Partner</label>
+        <textarea id="cpChatInput" rows="1" placeholder="Ask about Compliance Partner..."
+                  autocomplete="off"></textarea>
+        <button class="cp-chat-send" type="submit" aria-label="Send">Ask</button>
+      </form>`;
+  }
+
+  function logEl() { return document.getElementById('cpChatLog'); }
+
+  function draw() {
+    const log = logEl();
+    if (!log) return;
+    let html = '';
+    if (!history.length) {
+      html += `<div class="cp-chat-intro">
+                 <p>Ask me about preparing controls, monitoring, audit testing or access.
+                    I answer from the Compliance Partner guide and say so when something
+                    is not in it.</p>
+                 <div class="cp-chat-starters">${STARTERS.map(
+                     q => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+               </div>`;
+    }
+    for (const turn of history) {
+      if (turn.role === 'you') {
+        html += `<div class="cp-turn you"><div class="cp-bub">${esc(turn.text)}</div></div>`;
+      } else if (turn.pending) {
+        html += `<div class="cp-turn bot"><div class="cp-bub cp-think">
+                   <span></span><span></span><span></span></div></div>`;
+      } else {
+        const unknown = turn.mode === 'unknown' || turn.mode === 'error';
+        html += `<div class="cp-turn bot"><div class="cp-bub ${unknown ? 'cp-unknown' : ''}">
+                   ${fmt(turn.text)}${unknown ? '' : sourceLine(turn.sources)}</div></div>`;
+      }
+    }
+    log.innerHTML = html;
+    log.scrollTop = log.scrollHeight;
+    log.querySelectorAll('.cp-chat-starters button').forEach(b => {
+      b.onclick = () => send(b.dataset.q);
+    });
+  }
+
+  async function send(text) {
+    text = String(text || '').trim();
+    if (!text) return;
+    history.push({ role: 'you', text });
+    const pending = { role: 'bot', pending: true };
+    history.push(pending);
+    draw();
+
+    const { ok, body } = await api('/api/ask', {
+      method: 'POST', body: JSON.stringify({ question: text })
+    }).catch(() => ({ ok: false, body: null }));
+
+    const i = history.indexOf(pending);
+    const answer = (ok && body) ? body : {
+      answer: 'The help service is not reachable from this page right now.',
+      sources: [], mode: 'error'
+    };
+    history[i] = { role: 'bot', text: answer.answer, sources: answer.sources,
+                   mode: answer.mode };
+    draw();
+    const input = document.getElementById('cpChatInput');
+    if (input) input.focus();
+  }
+
+  function ensurePanel() {
+    let el = document.getElementById('cpChat');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'cpChat';
+    el.className = 'cp-chat';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Compliance Partner help assistant');
+    el.hidden = true;
+    el.innerHTML = panelHTML();
+    document.body.appendChild(el);
+
+    el.querySelector('.cp-chat-x').onclick = closeChat;
+    const form = el.querySelector('#cpChatForm');
+    const input = el.querySelector('#cpChatInput');
+    form.onsubmit = (e) => { e.preventDefault(); const v = input.value; input.value = '';
+                             input.style.height = 'auto'; send(v); };
+    // Enter sends, Shift+Enter is a newline - the usual contract for a chat box.
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+    };
+    input.oninput = () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    };
+    if (ASSIST && ASSIST.model) {
+      const m = el.querySelector('#cpChatMode');
+      if (m) m.textContent = 'Answers from the guide, written by ' + ASSIST.model;
+    }
+    return el;
+  }
+
+  function openChat() {
+    const el = ensurePanel();
+    el.hidden = false;
+    document.body.classList.add('cp-chat-open');
+    draw();
+    const input = document.getElementById('cpChatInput');
+    if (input) input.focus();
+  }
+
+  function closeChat() {
+    const el = document.getElementById('cpChat');
+    if (el) el.hidden = true;
+    document.body.classList.remove('cp-chat-open');
+    const btn = document.querySelector('.cp-help');
+    if (btn) btn.focus();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const el = document.getElementById('cpChat');
+      if (el && !el.hidden) closeChat();
+    }
+  });
+
+  // The button in the page calls this if it exists, and the prototype's own
+  // guide modal if it does not - so a runner without an index is not a dead owl.
+  api('/api/ask').then(({ ok, body }) => {
+    if (!ok || !body || !body.available || !body.sections) return;
+    ASSIST = body;
+    window.cpHelpOpen = openChat;
+  }).catch(() => { /* no runner: the owl keeps opening the guide modal */ });
+
 })();

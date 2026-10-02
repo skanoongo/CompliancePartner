@@ -31,7 +31,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
 
-from core import auth, environments, systems, users
+from core import assistant, auth, environments, systems, users
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("CAPTURE_DATA_DIR", "/data"))
@@ -400,6 +400,37 @@ def api_directory_names():
         return jsonify({"names": []})
     return jsonify({"names": [{"name": u["name"], "role": u["role"]}
                               for u in users.all_users()]})
+
+
+@app.post("/api/ask")
+def api_ask():
+    """The help assistant. Answers from docs/, and says so when it cannot.
+
+    Behind the same session gate as the rest of /api/: the guide describes how
+    access is granted and which systems are live, which is not something to
+    serve to anyone who can reach the port.
+    """
+    body = request.get_json(silent=True) or {}
+    question = str(body.get("question") or "")
+    try:
+        return jsonify(assistant.ask(question))
+    except Exception as exc:              # noqa: BLE001 - help must not 500
+        app.logger.warning("assistant failed: %s", exc)
+        return jsonify({
+            "answer": "The guide could not be searched just now. "
+                      "Try again, or ask a Compliance Partner administrator.",
+            "sources": [], "mode": "error", "confidence": 0.0,
+        })
+
+
+@app.get("/api/ask")
+def api_ask_status():
+    """What the assistant has indexed - the page uses it to decide whether to
+    offer the bubble at all."""
+    try:
+        return jsonify(dict(assistant.configured(), available=True))
+    except Exception:                     # noqa: BLE001
+        return jsonify({"available": False, "docs": [], "sections": 0, "model": None})
 
 
 @app.get("/api/sox-systems")

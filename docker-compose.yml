@@ -57,6 +57,10 @@ services:
       # become an image layer. Safe when the file does not exist: the runner then
       # has no environments configured and every login is interactive.
       - ./config:/config:ro
+      # The guide the help assistant answers from. Mounted rather than copied
+      # into the image so editing a doc updates the answers without a rebuild,
+      # and read-only because nothing in the runner should rewrite them.
+      - ./docs:/docs:ro
     # Chromium needs more than the default 64MB of shared memory or tabs crash.
     shm_size: "1gb"
     expose:
