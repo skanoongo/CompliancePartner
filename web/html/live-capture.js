@@ -998,11 +998,31 @@
     return seen.slice(0, 2);
   }
 
+  // "For more information" - the password policy, when the runner attached it.
+  // The URL is checked again here although the runner already refuses anything
+  // but http(s): this is the line that puts it in an href.
+  function references(turn) {
+    const out = [];
+    for (const r of (turn.references || [])) {
+      if (r.kind === 'url' && /^https?:\/\//i.test(r.url || '')) {
+        out.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">`
+                 + `${esc(r.title)} &#8599;</a>`);
+      } else if (r.kind === 'file' && r.title) {
+        out.push(esc(r.title));
+      }
+    }
+    if (!out.length) return '';
+    return `<div class="cp-chat-ref">For more information: ${out.join(' &middot; ')}</div>`;
+  }
+
   // Shown on every answer: the sections a reader can check it against, and what
   // turned them into this reply.
   function footer(turn) {
     const bits = [];
-    const names = sourceLine(turn.sources);
+    // On a refusal the sources are only the nearest misses. Printing them as
+    // "From ..." would credit a section with an answer it did not give.
+    const refused = turn.mode === 'unknown' || turn.mode === 'error';
+    const names = refused ? null : sourceLine(turn.sources);
     if (names && names.length) bits.push('From ' + names.map(esc).join(' &middot; '));
     const eng = engineOf(turn);
     if (eng) bits.push(esc(eng));
@@ -1053,7 +1073,7 @@
       } else {
         const unknown = turn.mode === 'unknown' || turn.mode === 'error';
         html += `<div class="cp-turn bot"><div class="cp-bub ${unknown ? 'cp-unknown' : ''}">
-                   ${fmt(turn.text)}${footer(turn)}</div></div>`;
+                   ${fmt(turn.text)}${references(turn)}${footer(turn)}</div></div>`;
       }
     }
     log.innerHTML = html;
@@ -1081,7 +1101,8 @@
       sources: [], mode: 'error'
     };
     history[i] = { role: 'bot', text: answer.answer, sources: answer.sources,
-                   mode: answer.mode, model: answer.model, engine: answer.engine };
+                   mode: answer.mode, model: answer.model, engine: answer.engine,
+                   references: answer.references || [] };
     draw();
     const input = document.getElementById('cpChatInput');
     if (input) input.focus();

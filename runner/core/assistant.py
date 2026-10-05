@@ -28,6 +28,22 @@ the model never sees the question without the evidence, and any failure - no key
 timeout, bad response - falls back to the extractive answer rather than to an
 apology. ASSISTANT_MODEL picks the model; the default is the cheapest one that
 does this job well.
+
+THE PASSWORD POLICY REFERENCE
+-----------------------------
+The guide describes a "Password Policy Alignment" check that compares systems
+against the corporate password policy, but it does not contain that policy, so
+"what is the minimum length?" used to end in a refusal with nowhere to go.
+CW_PASSWORD_POLICY_DOC (environment, or a Doppler secret) names the policy:
+
+  - an http(s) URL: password questions carry a link to it. It is not fetched.
+    Policy pages sit behind SSO, and a server that fetches whatever URL its
+    configuration names is a server that can be pointed at the network.
+  - a .md or .txt path (absolute, or relative to the docs folder): it is also
+    indexed, so its content answers and is cited like the guide's.
+
+Unset, or set to something unusable, it changes nothing: no reference is better
+than a link that goes nowhere. CW_PASSWORD_POLICY_TITLE sets the link text.
 """
 
 import json
@@ -87,6 +103,68 @@ SYNONYMS = {
 
 _lock = threading.Lock()
 _index = {"chunks": [], "df": {}, "avglen": 1.0, "stamp": None}
+
+
+POLICY_VAR = "CW_PASSWORD_POLICY_DOC"
+POLICY_TITLE = os.environ.get("CW_PASSWORD_POLICY_TITLE", "CoreWeave Password Policy")
+
+# A question touching any of these is a password-policy question, and gets the
+# policy as a reference whether or not the guide could answer it.
+POLICY_TERMS = {
+    "password", "passwords", "passphrase", "passphrases", "complexity",
+    "expiry", "expire", "expiration", "rotation", "rotate", "lockout",
+    "mfa", "2fa", "multifactor", "credential", "credentials",
+}
+
+
+def _setting(name):
+    """A setting from the environment, else from Doppler; '' when absent."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    try:                                   # Doppler is this project's secret store
+        from . import doppler
+        if doppler.configured():
+            return str((doppler.fetch() or {}).get(name, "") or "").strip()
+    except Exception:                      # noqa: BLE001 - never block an answer
+        pass
+    return ""
+
+
+def policy():
+    """The configured password policy, or None.
+
+    None also for a value that cannot be used - a file that is not there, a type
+    that is not text, a scheme that is not http(s) - because a reference the
+    reader cannot follow is worse than none.
+    """
+    val = _setting(POLICY_VAR)
+    if not val:
+        return None
+    if re.match(r"^https?://\S+$", val, re.I):
+        return {"title": POLICY_TITLE, "kind": "url", "url": val}
+    if "://" in val:
+        return None                        # javascript:, file:, ftp: - never linked
+    path = Path(val)
+    if not path.is_absolute():
+        path = DOCS / path
+    try:
+        if path.is_file() and path.suffix.lower() in (".md", ".txt"):
+            return {"title": POLICY_TITLE, "kind": "file", "path": path,
+                    "doc": path.name}
+    except OSError:
+        pass
+    return None
+
+
+def _reference(pol):
+    """What the page is told about the policy - never the container path."""
+    ref = {"title": pol["title"], "kind": pol["kind"]}
+    if pol["kind"] == "url":
+        ref["url"] = pol["url"]
+    else:
+        ref["doc"] = pol["doc"]
+    return ref
 
 
 # ------------------------------------------------------------------ indexing
@@ -195,21 +273,42 @@ def _wrap(heading, body):
     return out
 
 
+def _sources_on_disk():
+    """(path, is_policy) for everything the index is built from."""
+    found = [(p, False) for p in sorted(DOCS.glob("*.md"))] if DOCS.is_dir() else []
+    pol = policy()
+    if pol and pol["kind"] == "file":
+        target = pol["path"].resolve()
+        # A policy that already lives in docs/ is indexed once, flagged as policy.
+        found = [(p, p.resolve() == target or flag) for p, flag in found]
+        if not any(p.resolve() == target for p, _ in found):
+            found.append((pol["path"], True))
+    return found
+
+
 def _stamp():
-    if not DOCS.is_dir():
-        return None
-    return tuple(sorted((p.name, p.stat().st_mtime, p.stat().st_size)
-                        for p in DOCS.glob("*.md")))
+    out = []
+    for p, flag in _sources_on_disk():
+        try:
+            st = p.stat()
+            out.append((str(p), flag, st.st_mtime, st.st_size))
+        except OSError:
+            continue
+    # The setting itself is part of the stamp: switching it from a URL to a file
+    # must rebuild even though no file under docs/ changed.
+    return tuple(sorted(out)) + (("policy", _setting(POLICY_VAR)),)
 
 
 def _build():
     chunks = []
-    for path in sorted(DOCS.glob("*.md")):
+    for path, is_policy in _sources_on_disk():
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         title, sections = _split_sections(text)
+        if is_policy:
+            title = POLICY_TITLE
         for heading, body in sections:
             if "**Q:" in body:
                 made = _faq_chunks(heading, body)
@@ -218,6 +317,9 @@ def _build():
             for c in made:
                 c["doc"] = path.name
                 c["title"] = title or path.stem
+                c["policy"] = is_policy
+                if is_policy and not c["heading"]:
+                    c["heading"] = POLICY_TITLE     # a .txt has no headings
                 # The heading and the question are the strongest signal of what a
                 # chunk is about, so they are indexed as well as the body.
                 c["terms"] = _tokens(c["heading"] + " " + c["question"] + " " + c["text"])
@@ -324,7 +426,7 @@ def _engine(model=None):
 
 def _source(c):
     return {"doc": c["doc"], "heading": c["heading"],
-            "question": c.get("question", "")}
+            "question": c.get("question", ""), "policy": bool(c.get("policy"))}
 
 
 NO_ANSWER = ("That is not covered in the Compliance Partner guide. "
@@ -344,21 +446,13 @@ def _extractive(question, hits, coverage):
 # ------------------------------------------------------------- optional model
 
 def _api_key():
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if key:
-        return key
-    try:                                   # Doppler is this project's secret store
-        from . import doppler
-        if doppler.configured():
-            return (doppler.fetch() or {}).get("ANTHROPIC_API_KEY", "").strip()
-    except Exception:                      # noqa: BLE001 - never block an answer
-        pass
-    return ""
+    return _setting("ANTHROPIC_API_KEY")
 
 
 SYSTEM = (
     "You are the Compliance Partner Assistant for CoreWeave employees.\n"
-    "Answer ONLY from the guide sections provided in the user message.\n"
+    "Answer ONLY from the sections provided in the user message: the Compliance "
+    "Partner guide and, where present, the CoreWeave password policy.\n"
     "- Use the exact button, tab and control names as written.\n"
     "- If the sections do not answer the question, reply exactly: " + NO_ANSWER + "\n"
     "- Never state a due date, control name or behaviour that is not in the sections.\n"
@@ -443,10 +537,32 @@ def configured():
             "model": model or GUIDE_ENGINE,
             "engine": "claude" if model else "guide",
             "intro": _intro(idx["chunks"]),
-            "starters": starters()}
+            "starters": starters(),
+            "policy": _reference(policy()) if policy() else None}
+
+
+NO_ANSWER_POLICY = ("The Compliance Partner guide does not cover that. For password "
+                    "requirements, the {title} is the reference.")
 
 
 def ask(question):
+    """An answer, plus the password policy as a reference when it applies."""
+    result = _answer(question)
+    pol = policy()
+    if not pol or result.get("mode") == "empty":
+        return result
+    about_passwords = bool(POLICY_TERMS & set(_tokens(question or "")))
+    cited = any(s.get("policy") for s in result.get("sources", []))
+    if not (about_passwords or cited):
+        return result
+    result["references"] = [_reference(pol)]
+    if result.get("mode") == "unknown" and about_passwords:
+        # Not a dead end any more: there is somewhere to go for this one.
+        result["answer"] = NO_ANSWER_POLICY.format(title=pol["title"])
+    return result
+
+
+def _answer(question):
     question = (question or "").strip()
     if not question:
         return dict({"answer": "Ask me anything about Compliance Partner.",

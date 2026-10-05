@@ -40,6 +40,11 @@ services:
       # selects Doppler as the source of credentials; without it the runner falls
       # back to config/environments.yaml. Read from .env, which is gitignored.
       DOPPLER_TOKEN: "${DOPPLER_TOKEN:-}"
+      # Where the help assistant sends password-policy questions. A URL is linked
+      # (never fetched); a .md/.txt path is indexed and cited. Also readable from
+      # Doppler under the same name. Unset: no reference is shown.
+      CW_PASSWORD_POLICY_DOC: "${CW_PASSWORD_POLICY_DOC:-}"
+      CW_PASSWORD_POLICY_TITLE: "${CW_PASSWORD_POLICY_TITLE:-CoreWeave Password Policy}"
       # Where the page sends people to finish SSO. Must be reachable from THEIR
       # browser, so it is the public URL of the site, not a container address.
       CAPTURE_SESSION_URL: "${CAPTURE_SESSION_URL:-/session/vnc.html?path=session/websockify&autoconnect=1&resize=remote}"
