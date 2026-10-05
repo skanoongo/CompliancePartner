@@ -57,6 +57,65 @@ later runs start straight away.
 A full run takes roughly 20-40 minutes and produces ~30 screenshots; a single
 project is proportionally quicker.
 
+## Making changes and CI
+
+`main` is the integration branch. Use the `CI` branch for changes and open a pull
+request into `main` when they are ready. For a new, independent change, start a
+separate feature branch:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c feature/my-change
+```
+
+Commit and push your changes, then open a pull request into `main`:
+
+```bash
+git add <changed-files>
+git commit -m "Describe the change"
+git push -u origin feature/my-change
+```
+
+The GitHub Actions workflow in `.github/workflows/ci.yml` runs on pull requests
+into `main`, pushes to `main`, `CI` and `ci/*` branches, and manual runs. It checks Python,
+external and inline JavaScript, shell and Compose syntax; builds both Docker images;
+and starts the services to verify the website and proxied health API. It uses no
+production credentials and does not run Workato or NetSuite evidence captures.
+
+Run the lightweight checks locally with Python and Node installed:
+
+```bash
+python3 -m compileall -q runner scripts
+python3 scripts/check_web_js.py
+bash -n runner/entrypoint.sh
+docker compose config --quiet
+```
+
+### Shailesh's approval
+
+`.github/CODEOWNERS` assigns every file to Shailesh Kanoongo (`@skanoongo`). Merge
+that file into `main` first: GitHub uses the target branch's CODEOWNERS file when
+requesting reviews, so the initial setup pull request needs his review to be
+requested manually.
+
+A repository administrator must configure the branch protection rule for `main`
+in **Settings → Branches**:
+
+- Enable **Require a pull request before merging** and require **1 approval**.
+- Enable **Require review from Code Owners** so Shailesh must approve.
+- Enable **Dismiss stale pull request approvals when new commits are pushed**
+  so changes after approval need another review.
+- Enable **Do not allow bypassing the above settings** to apply the rule to
+  administrators as well.
+- To enforce CI, enable required status checks and select **Code checks** and
+  **Docker build and smoke checks** after their first run.
+
+The ownership file alone does not block merges. Approval and CI checks become
+mandatory once the administrator enables these branch rules. See GitHub's
+[code-owner documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
+and [branch-protection instructions](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/managing-a-branch-protection-rule).
+
 ### User access review, and what "active" means
 
 Workato has no single active/inactive flag on a collaborator. It shows a state per
