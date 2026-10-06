@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, CI, 'ci/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-checks:
+    name: Code checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m compileall -q runner scripts
+      - name: Check JavaScript syntax
+        run: python scripts/check_web_js.py
+      - name: Check entrypoint syntax
+        run: bash -n runner/entrypoint.sh
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+  docker-smoke:
+    name: Docker build and smoke checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # CI uses the example-free checkout and an ephemeral data volume.
+      DOPPLER_TOKEN: ''
+      WEB_PORT: '8080'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build both images
+        run: docker compose build
+      - name: Start services and wait for health checks
+        run: docker compose up -d --wait --wait-timeout 120
+      - name: Verify website and proxied API
+        run: |
+          curl --fail --silent --show-error http://localhost:8080/healthz
+          curl --fail --silent --show-error http://localhost:8080/login > /dev/null
+          curl --fail --silent --show-error http://localhost:8080/api/health |
+            python3 -c 'import json, sys; data = json.load(sys.stdin); assert data["ok"] is True, data'
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: Remove services and CI data
+        if: always()
+        run: docker compose down --volumes --remove-orphans
