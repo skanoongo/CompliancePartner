@@ -12,7 +12,9 @@ services:
   # The website: cw_CompliancePartnercore.internal.coreweave.com
   web:
     build: ./web
-    image: compliance-partner-web:latest
+    # Built locally by default. Set WEB_IMAGE to the published image to run what
+    # main last built instead - see "Published images" in the README.
+    image: "${WEB_IMAGE:-compliance-partner-web:latest}"
     container_name: cw_CompliancePartnercore
     hostname: cw-compliancepartnercore
     restart: unless-stopped
@@ -32,7 +34,7 @@ services:
   # The capture runner: virtual desktop + browser + job API.
   runner:
     build: ./runner
-    image: compliance-partner-runner:latest
+    image: "${RUNNER_IMAGE:-compliance-partner-runner:latest}"
     container_name: compliance-partner-runner
     restart: unless-stopped
     environment:

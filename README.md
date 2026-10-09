@@ -57,6 +57,28 @@ later runs start straight away.
 A full run takes roughly 20-40 minutes and produces ~30 screenshots; a single
 project is proportionally quicker.
 
+### Published images
+
+Every push to `main` rebuilds both images and publishes them to GitHub's registry
+([.github/workflows/docker-images.yml](.github/workflows/docker-images.yml)),
+tagged `latest` and `sha-<short sha>`. To run those instead of building, put
+this in `.env`:
+
+```bash
+WEB_IMAGE=ghcr.io/skanoongo/compliance-partner-web:latest
+RUNNER_IMAGE=ghcr.io/skanoongo/compliance-partner-runner:latest
+```
+
+then update to whatever `main` last built with:
+
+```bash
+docker login ghcr.io          # a GitHub token with read:packages; the images are private
+docker compose pull && docker compose up -d
+```
+
+Pin a `sha-...` tag instead of `latest` to hold a host on a known build. Leave
+both unset and `docker compose up -d --build` builds locally as before.
+
 ### User access review, and what "active" means
 
 Workato has no single active/inactive flag on a collaborator. It shows a state per

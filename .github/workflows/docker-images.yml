@@ -1,0 +1,76 @@
+# Builds both images on every push to main and publishes them to GitHub's
+# registry, so a host can `docker compose pull` instead of building:
+#
+#   ghcr.io/<owner>/compliance-partner-web:latest      (and :sha-<short sha>)
+#   ghcr.io/<owner>/compliance-partner-runner:latest   (and :sha-<short sha>)
+#
+# Every image is rebuilt on every push, not just the one whose folder changed:
+# the base images (nginx, python, Playwright's Chromium) take security fixes
+# that a path filter would never pick up. The layer cache keeps an unchanged
+# image fast.
+#
+# Secrets never enter an image: credentials come from Doppler at run time and
+# config/ and docs/ are mounted by docker-compose.yml, not copied in.
+
+name: Docker images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [web, runner]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Registry paths must be lowercase; an owner name need not be.
+      - name: Image name
+        id: name
+        run: echo "repo=ghcr.io/${OWNER,,}/compliance-partner-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.name.outputs.repo }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      # amd64 only: the runner's Playwright Chromium and the host it runs on
+      # are amd64, and an emulated arm64 build of a desktop image takes ages.
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.image }}
+          platforms: linux/amd64
+          push: true
+          pull: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
