@@ -103,6 +103,12 @@ from core import environments
 # plan, so every candidate is tried and the first one that actually renders a list
 # of people wins. The one that worked is recorded in the manifest.
 MEMBER_URLS = (
+    # Current: Workspace admin > Access control > Collaborators. With environments
+    # enabled it exists only in the Development environment, and only for an
+    # account allowed to manage collaborators - /members/collaborators redirects
+    # here, and anyone else gets Workato's "That page doesn't exist".
+    f"{BASE}/members/access_control/collaborators",
+    f"{BASE}/members/access_control",
     f"{BASE}/members/collaborators",
     f"{BASE}/collaborators",
     f"{BASE}/members/users",
@@ -492,6 +498,7 @@ class UarCapture:
         self.manifest = []
         self.warnings = []
         self.rejected = []
+        self.no_access_control = False
 
     def warn(self, msg):
         log(f"  !! {msg}")
@@ -577,6 +584,14 @@ class UarCapture:
                 self.warn("the session dropped while looking for the collaborator page")
                 return None
 
+            if "/members/access_control" in landed and self._missing_page():
+                # The collaborator page, and Workato saying this account may not
+                # see it. Recorded so the failure can name the real cause.
+                self.no_access_control = True
+                log("    rejected: Workato says this page does not exist for this account")
+                rejected.append(f"{url} -> {landed}: page does not exist for this account")
+                continue
+
             data = self.page.evaluate(EXTRACT_JS)
             ok, why = self.roster_verdict(data, url, landed)
             if ok:
@@ -589,6 +604,30 @@ class UarCapture:
 
         self.rejected = rejected
         return None
+
+    def _missing_page(self):
+        try:
+            title = (self.page.title() or "").lower().replace("\u2019", "'")
+        except Exception:
+            return False
+        return "page doesn't exist" in title or "page does not exist" in title
+
+    def not_found_reason(self):
+        """Why no roster was found, as something a person can act on."""
+        if not getattr(self, "no_access_control", False):
+            return ("Open the browser session, navigate to the collaborators list by hand, "
+                    "and add that URL to MEMBER_URLS.")
+        where = ("" if (self.workspace or "").lower() in ("development", "dev") else
+                 f" Collaborators are managed only in the Development environment, and this "
+                 f"run was for {self.workspace!r}; the roster is shared, so prepare the "
+                 f"review with Development selected.")
+        return ("Workato answered \"That page doesn't exist\" for Workspace admin > Access "
+                "control > Collaborators. The account the runner signs in with is not "
+                "allowed to manage collaborators in this workspace - its Workspace admin "
+                "shows Settings only." + where + " Ask a Workato admin to give that account "
+                "a Development role that includes collaborator management (or view access to "
+                "it), or sign in to the browser session as someone who has it, then prepare "
+                "the review again.")
 
     def goto(self, url):
         self.page.goto(url, wait_until="domcontentloaded")
@@ -996,6 +1035,8 @@ def run(args, out_dir):
 
         url = cap.find_members_page()
         if not url:
+            reason = cap.not_found_reason()
+            cap.warn(reason)
             cap.shoot("not-found", "No collaborator page could be opened", page.url)
             manifest = out_dir / "manifest.json"
             manifest.write_text(json.dumps({
@@ -1012,8 +1053,7 @@ def run(args, out_dir):
                 "No collaborator roster could be found. Each candidate was opened and "
                 "rejected:\n  " + "\n  ".join(cap.rejected or list(MEMBER_URLS))
                 + "\n\nNo user list was produced. This is NOT evidence that the workspace "
-                  "has no users.\nOpen the browser session, navigate to the collaborators "
-                  "list by hand, and add that URL to MEMBER_URLS.")
+                  "has no users.\n" + reason)
 
         log(f"Collaborator page: {url}")
         rows, headers, parts = cap.collect(url)
