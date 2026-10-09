@@ -7,11 +7,34 @@ screenshots what it read. It never invites, removes, suspends or edits anyone.
 
 WHAT IT PRODUCES
 ----------------
-  users.csv / users.json   every collaborator: name, email, role, status, and
-                           whether this review counts them as active
+  users.csv / users.json   every collaborator: name, email, role, status, whether
+                           this review counts them as active, and - when a Workday
+                           terminations list is supplied - whether they left
   screenshots + manifest   whole-screen captures of the pages the list came from,
                            so the listing can be tied back to what was on screen
-  .xlsx workbook           Active and Inactive tabs, plus the evidence screenshots
+  .xlsx workbook           the UAR template's five tabs: Review Checklist |
+                           Parameter Screenshot - Before | User List | Workday
+                           termination List | Parameter Screenshot - After
+
+WHAT IT READS
+-------------
+  - the collaborator roster, at the first candidate URL that really is one, every
+    page of it: scrolled for lists that render on demand, and "next" followed for
+    lists that paginate
+  - each collaborator's own page, for the role they hold in THIS workspace's
+    environment - the list shows one role, the detail page shows it per
+    environment, and the review is of one environment (--no-detail skips this)
+  - any further access pages configured as `uar_pages` (Workato Agentic users
+    and roles, say), each listed and evidenced the same way, tagged by source
+
+TERMINATIONS
+------------
+The Workday "SOX Audit - Terminations" export (.csv or .xlsx), from --terminations
+or the Workato environment's `uar_terminations` setting (Doppler:
+ENVIRONMENTS_WORKATO_UAR_TERMINATIONS), is matched by email. A terminated person
+still on the roster is flagged in the workbook, in users.json and as a run
+warning. Without the file the column says "not checked" - never "Active User",
+which would be a claim nobody verified.
 
 ON "ACTIVE" AND "INACTIVE"
 --------------------------
@@ -35,6 +58,8 @@ Usage
   python3 -m workato.uar_capture --period "Q3 FY26"
   python3 -m workato.uar_capture --period "Q3 FY26" --out ./uar_q3
   python3 -m workato.uar_capture --capture-only      # no workbook
+  python3 -m workato.uar_capture --terminations /data/terminations.xlsx
+  python3 -m workato.uar_capture --no-detail         # roster only, no per-user pages
 """
 
 import argparse
@@ -70,6 +95,7 @@ from core.platform import (
 from workato.sox_capture import (
     BASE,
     ensure_workspace,
+    page_text,
 )
 from core import environments
 
@@ -142,7 +168,11 @@ EXTRACT_JS = r"""
     const key = m[0].toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({email: m[0], cells: cells, text: text, source: source});
+    // The collaborator's own page, when the row links to it - that is where the
+    // per-environment role is.
+    const a = el && el.querySelector && el.querySelector('a[href*="/members/"]');
+    out.push({email: m[0], cells: cells, text: text, source: source,
+              href: a ? a.getAttribute('href') : ''});
   };
 
   let fromTable = 0;
@@ -252,14 +282,212 @@ def name_from_row(cells, headers, email):
     return email.split("@")[0]
 
 
+MEMBER_LINK_RE = re.compile(r"/members/(\d+)")
+
+# ------------------------------------------------------------------ roles
+#
+# A role is a short label - "Environment admin", "Operator", "Agent builder". Row
+# and page text also carries names, emails, auth methods, statuses, avatar
+# initials and activity lines ("Recipe started 2 days ago"), none of which is a
+# role and all of which used to end up in the Role column. These filters exist so
+# the column holds a role or nothing: blank is honest, raw row text is not.
+ROLE_WORDS = ("admin", "developer", "operator", "analyst", "viewer", "member", "owner",
+              "custom", "manager", "agent", "builder", "editor", "contributor",
+              "designer", "architect", "workspace")
+NOISE_RE = re.compile(
+    r"^(sso|saml|oauth|password|active|inactive|invited|pending|disabled|deactivated|"
+    r"logged\s*in.*|last\s*(active|login).*|never\s*logged.*|\d{1,2}/\d{1,2}/\d{2,4}.*|"
+    r"[A-Z]{1,2}|yes|no|-|\u2014)$", re.I)
+ENV_NAMES = ("development", "dev", "test", "staging", "stage", "uat", "production", "prod")
+ACTIVITY_RE = re.compile(r"^(recent activity|activity|last (active|login|seen)|logged in|"
+                         r"created|updated|invited|joined)\b", re.I)
+# Lines that describe an event, not a role ("Custom oauth key deleted").
+EVENT_RE = re.compile(r"\b(deleted|created|updated|started|stopped|added|removed|changed|"
+                      r"edited|deployed|logged|signed|invited|key|token|oauth|connection|"
+                      r"recipe|ago|\d{4})\b", re.I)
+
+
+def _role_parts(cells, email, name=""):
+    """Short text parts of a row that could be a role."""
+    user = email.split("@")[0].lower()
+    parts = []
+    for c in cells:
+        for part in re.split(r"\n|,\s*|\s{2,}|\s\|\s", c):
+            part = part.strip(" |")
+            if not part or "@" in part or len(part) > 60:
+                continue
+            low = part.lower()
+            if low == user or (name and low == name.lower()) or NOISE_RE.match(part):
+                continue
+            parts.append(part)
+    return parts
+
+
+def guess_role(cells, email, name=""):
+    """Role names only, from parts that contain a known role word. Never raw text."""
+    known = [p for p in _role_parts(cells, email, name)
+             if any(w in p.lower() for w in ROLE_WORDS) and not EVENT_RE.search(p)]
+    return " | ".join(dict.fromkeys(known))
+
+
+def role_for_env(cells, headers, email, name, env):
+    """List page: when a column header names the environment, the role is that cell."""
+    if not env or not headers:
+        return None
+    for i, h in enumerate(headers):
+        if env.lower() in h.lower() and i < len(cells):
+            parts = _role_parts([cells[i]], email, name)
+            return " | ".join(dict.fromkeys(parts)) if parts else None
+    return None
+
+
+def _is_env_heading(s):
+    s = s.rstrip(":").strip().lower()
+    return s in ENV_NAMES or any(s in (f"{e} environment", f"{e} role", f"{e} roles")
+                                 for e in ENV_NAMES)
+
+
+def _role_like(s):
+    return (any(w in s.lower() for w in ROLE_WORDS) and len(s) < 40 and "@" not in s
+            and not NOISE_RE.match(s) and not EVENT_RE.search(s) and not _is_env_heading(s))
+
+
+def role_from_detail_text(text, env):
+    """Detail page: the role listed for `env`.
+
+    Workato lays this out three ways depending on plan and page version - an
+    environment heading with the role beneath it, "Development: Operator" on one
+    line, or the role with the environment name beside it - so all three are
+    tried. Without an environment match, the first role-like line before any
+    activity section, preferring something more specific than plain "Member".
+    Returns "" when nothing role-like is there.
+    """
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    low = [l.lower() for l in lines]
+    env_l = (env or "").lower()
+    if env_l:
+        for i, l in enumerate(low):
+            if _is_env_heading(l) and env_l in l:
+                for j in range(i + 1, min(i + 6, len(lines))):
+                    if _is_env_heading(low[j]) or ACTIVITY_RE.match(lines[j]):
+                        break
+                    if _role_like(lines[j]):
+                        return lines[j]
+        for l in lines:
+            m = re.match(rf"^{re.escape(env_l)}\b\s*(environment)?\s*(role)?\s*[:\-\u2013]\s*(.+)$",
+                         l, re.I)
+            if m and _role_like(m.group(3).strip()):
+                return m.group(3).strip()
+        for i, l in enumerate(lines):
+            if _role_like(l):
+                window = low[max(0, i - 2):i] + low[i + 1:i + 3]
+                if any(env_l == w.rstrip(":") or w.startswith(env_l) for w in window):
+                    return l
+    picked = []
+    for l in lines:
+        if ACTIVITY_RE.match(l):
+            break
+        if _role_like(l):
+            picked.append(l)
+    specific = [p for p in picked if p.lower() != "member"]
+    return (specific or picked or [""])[0]
+
+
+# Finds a usable "next page" control and marks it for the click. Covers aria
+# labels, Next / > / >> text, rel=next, and numbered pagination (current + 1).
+NEXT_PAGE_JS = r"""
+() => {
+  const isOff = el => el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+                      /disabled/i.test(el.className || '') ||
+                      el.closest('[aria-disabled="true"], .disabled, [disabled]');
+  const cands = Array.from(document.querySelectorAll('button, a, [role=button]'));
+  const txt = el => ((el.innerText || el.textContent || '') + ' ' +
+                     (el.getAttribute('aria-label') || '') + ' ' +
+                     (el.getAttribute('title') || '')).trim();
+  document.querySelectorAll('[data-uar-next]').forEach(e => e.removeAttribute('data-uar-next'));
+  let next = cands.find(el => /^(next( page)?|›|»|>|→)$/i.test(txt(el)) ||
+                              /next/i.test(el.getAttribute('aria-label') || '') ||
+                              el.getAttribute('rel') === 'next');
+  if (!next) {
+    const cur = cands.find(el => el.getAttribute('aria-current') === 'page' ||
+                                 /(active|current|selected)/i.test(el.className || ''));
+    const n = cur ? parseInt(txt(cur), 10) : NaN;
+    if (!isNaN(n)) next = cands.find(el => txt(el) === String(n + 1));
+  }
+  if (!next) return {found: false};
+  if (isOff(next)) return {found: true, enabled: false};
+  next.setAttribute('data-uar-next', '1');
+  return {found: true, enabled: true};
+}
+"""
+
+
+# ------------------------------------------------------------ terminations
+
+def load_terminations(path):
+    """Read the Workday "SOX Audit - Terminations" export, .csv or .xlsx.
+
+    Returns (rows including the header, {email: termination date}). The header
+    is the first row with an Email column, so a title row above it is fine.
+    """
+    p = Path(path).expanduser()
+    rows = []
+    if p.suffix.lower() in (".xlsx", ".xlsm"):
+        from openpyxl import load_workbook
+        ws = load_workbook(p, read_only=True, data_only=True).worksheets[0]
+        for r in ws.iter_rows(values_only=True):
+            rows.append(["" if v is None else
+                         (v.strftime("%m/%d/%y") if hasattr(v, "strftime") else str(v))
+                         for v in r])
+    else:
+        with open(p, newline="", encoding="utf-8-sig") as f:
+            rows = [list(r) for r in csv.reader(f)]
+    hi = next((i for i, r in enumerate(rows)
+               if any("email" in (c or "").lower() for c in r)), None)
+    if hi is None:
+        raise ValueError(f"{p.name}: no header row with an Email column")
+    header = rows[hi]
+    data = [r for r in rows[hi + 1:] if any((c or "").strip() for c in r)]
+    ei = next(i for i, c in enumerate(header) if "email" in (c or "").lower())
+    ti = next((i for i, c in enumerate(header)
+               if "termination date" in (c or "").lower()), None)
+    term = {}
+    for r in data:
+        if ei < len(r) and r[ei].strip():
+            date = r[ti].strip() if ti is not None and ti < len(r) else ""
+            term[r[ei].strip().lower()] = date or "Terminated"
+    return [header] + data, term
+
+
+def parse_pages(value):
+    """Further access pages: "Label|URL" items, separated by ";" or newlines, or
+    a YAML list of {label, url} / "Label|URL". Items without an http(s) URL are
+    dropped - a page nobody can open is not a page to evidence."""
+    items = value if isinstance(value, list) else re.split(r"[;\n]", str(value or ""))
+    out = []
+    for it in items:
+        if isinstance(it, dict):
+            label, url = str(it.get("label", "")).strip(), str(it.get("url", "")).strip()
+        else:
+            label, _, url = str(it).partition("|")
+            label, url = label.strip(), url.strip()
+            if not url and label.startswith("http"):
+                label, url = "", label
+        if re.match(r"^https?://", url):
+            out.append({"label": label or url, "url": url})
+    return out
+
+
 class UarCapture:
-    def __init__(self, page, out_dir, settle, workspace, display, max_parts):
+    def __init__(self, page, out_dir, settle, workspace, display, max_parts,
+                 max_pages=20):
         self.page = page
         self.out_dir = out_dir
         self.settle = settle
         self.workspace = workspace
         self.display = display
         self.max_parts = max_parts
+        self.max_pages = max_pages
         self.seq = 0
         self.manifest = []
         self.warnings = []
@@ -269,7 +497,7 @@ class UarCapture:
         log(f"  !! {msg}")
         self.warnings.append(msg)
 
-    def shoot(self, kind, desc, url, parts=1):
+    def shoot(self, kind, desc, url, parts=1, tab="before"):
         """Whole-screen capture, scrolling for extra parts on long listings."""
         self.seq += 1
         self.page.bring_to_front()
@@ -283,7 +511,7 @@ class UarCapture:
         log(f"  captured -> {fname}")
         self.manifest.append({
             "seq": self.seq, "part": parts, "kind": kind, "description": desc,
-            "url": url, "captured": ts.isoformat(), "file": str(path),
+            "url": url, "captured": ts.isoformat(), "file": str(path), "tab": tab,
         })
 
     @staticmethod
@@ -362,8 +590,59 @@ class UarCapture:
         self.rejected = rejected
         return None
 
-    def collect(self, url):
-        """Read the listing, scrolling to pull in rows rendered only on demand."""
+    def goto(self, url):
+        self.page.goto(url, wait_until="domcontentloaded")
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+        time.sleep(self.settle)
+
+    def collect(self, url, label="Workato collaborators"):
+        """Read every page of the listing.
+
+        Each page is scrolled for rows rendered only on demand, then "next" is
+        followed until it is missing or disabled, a page adds nobody new, or
+        max_pages is reached - the last raised as a warning, because stopping
+        early silently would under-count the population.
+        """
+        by_email, headers, parts = {}, [], 0
+        for page_no in range(1, self.max_pages + 1):
+            before = len(by_email)
+            tag = label if page_no == 1 else f"{label} - page {page_no}"
+            got, hdrs, n = self._collect_screen(url, tag, page_no)
+            headers = headers or hdrs
+            for row in got:
+                by_email.setdefault(row["email"].lower(), row)
+            parts += n
+            nxt = self.page.evaluate(NEXT_PAGE_JS) or {}
+            if not nxt.get("found") or not nxt.get("enabled"):
+                break
+            if page_no > 1 and len(by_email) == before:
+                log("  next page added nobody new - stopping")
+                break
+            if page_no == self.max_pages:
+                self.warn(f"'{label}' has more than {self.max_pages} pages; the rest were "
+                          f"not read - the user list is incomplete")
+                break
+            try:
+                self.page.click("[data-uar-next]", timeout=10000)
+            except Exception as exc:
+                self.warn(f"could not open page {page_no + 1} of '{label}' "
+                          f"({str(exc).splitlines()[0]}) - the user list may be incomplete")
+                break
+            try:
+                self.page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            time.sleep(max(2.0, self.settle))
+            self.page.evaluate("() => { const el = document.querySelector('[data-sox-scroll]');"
+                               " if (el) el.scrollTop = 0; window.scrollTo(0, 0); }")
+            log(f"  page {page_no + 1} of '{label}'")
+        return list(by_email.values()), headers, parts
+
+    def _collect_screen(self, url, label, page_no):
+        """One page of a listing, scrolled through, one screenshot per screen."""
         by_email = {}
         headers = []
         parts = 0
@@ -392,40 +671,115 @@ class UarCapture:
             for row in data["rows"]:
                 by_email.setdefault(row["email"].lower(), row)
             parts += 1
-            self.shoot("collaborators", f"Workato collaborators - {url}", url, parts=part)
+            self.shoot("collaborators", f"{label} - {url}", url,
+                       parts=part if page_no == 1 else f"{page_no}.{part}")
 
         return list(by_email.values()), headers, parts
 
-    def to_users(self, rows, headers):
+    def to_users(self, rows, headers, source="Workato collaborators"):
         users = []
         for row in rows:
             cells = row["cells"]
             email = row["email"]
+            name = name_from_row(cells, headers, email)
+            role = role_for_env(cells, headers, email, name, self.workspace)
+            if role is None:
+                role = (field_from_row(cells, headers, ("role", "permission", "access"))
+                        or guess_role(cells, email, name))
+            link = MEMBER_LINK_RE.search(row.get("href") or "")
             raw = status_from_row(cells, headers)
             active, bucket = classify(raw)
             if bucket == "unknown":
                 self.warn(f"{email}: status {raw!r} not recognised - classify this by hand "
                           f"before signing off (counted as neither active nor inactive)")
             users.append({
-                "name": name_from_row(cells, headers, email),
+                "name": name,
                 "email": email,
-                "role": field_from_row(cells, headers, ("role", "permission", "access")),
+                "role": role,
                 "status_raw": raw,
                 "status": bucket,
                 "active": active,
                 "last_activity": field_from_row(cells, headers,
                                                 ("last", "activity", "seen", "login")),
+                "member_id": link.group(1) if link else "",
+                "source": source,
+                "terminated": "",
                 "source_row": row["text"][:500],
             })
         users.sort(key=lambda u: (u["status"] != "active", u["email"].lower()))
         return users
+
+    def details(self, users, max_detail):
+        """Open each collaborator's own page for the role in this environment.
+
+        The roster shows one role; the detail page shows one per environment, and
+        this review is of one environment. The detail page wins when it names a
+        role. When it does not, the roster's role stays and a warning says so -
+        the person may hold no role here, which a reviewer must confirm.
+        """
+        linked = [u for u in users if u.get("member_id")]
+        if not linked:
+            log("  rows do not link to collaborator pages - roles are as the list shows them")
+            return
+        if len(linked) > max_detail:
+            self.warn(f"{len(linked)} collaborators, detail pages read for the first "
+                      f"{max_detail} only (--max-detail); the rest show the list's role")
+        for u in linked[:max_detail]:
+            url = f"{BASE}/members/{u['member_id']}"
+            log(f"  collaborator {u['email']}")
+            try:
+                self.goto(url)
+            except Exception as exc:
+                self.warn(f"{u['email']}: detail page did not open ({type(exc).__name__})")
+                continue
+            if "/users/sign_in" in self.page.url:
+                self.warn("the session dropped while reading collaborator pages")
+                return
+            role = role_from_detail_text(page_text(self.page), self.workspace)
+            if role:
+                u["role"] = role
+            else:
+                self.warn(f"{u['email']}: no role for '{self.workspace}' on their page - "
+                          f"they may hold none in this environment; check the screenshot")
+            self.shoot("collaborator", f"Collaborator - {u['name']} ({u['email']})", url)
+
+    def extra_page(self, pg):
+        """A further access page (Workato Agentic users, say), listed as-is."""
+        log(f"Page: {pg['label']} - {pg['url']}")
+        try:
+            self.goto(pg["url"])
+        except Exception as exc:
+            self.warn(f"'{pg['label']}' did not open ({type(exc).__name__})")
+            return []
+        if "/users/sign_in" in self.page.url or "login" in self.page.url.lower():
+            self.warn(f"'{pg['label']}' sent the browser to a sign-in page - check the URL "
+                      f"and this account's access to it")
+            return []
+        rows, headers, _ = self.collect(pg["url"], pg["label"])
+        if not rows:
+            self.warn(f"no users read from '{pg['label']}' - fill its rows in from the "
+                      f"screenshots; this is not evidence it has no users")
+        return self.to_users(rows, headers, source=pg["label"])
+
+
+def apply_terminations(users, term, warn):
+    """Mark each user who appears on the terminations list. A terminated person
+    who still holds access is the finding a UAR exists to surface, so each one is
+    a warning as well as a column."""
+    for u in users:
+        date = term.get(u["email"].lower(), "")
+        u["terminated"] = date
+        if date and u["active"] is not False:
+            warn(f"{u['email']} was terminated {date} but is still listed in "
+                 f"{u['source']} ({u['status_raw'] or u['status']}) - access needs review")
 
 
 def write_outputs(out_dir, users, meta):
     (out_dir / "users.json").write_text(json.dumps(
         {**meta, "users": users}, indent=2))
 
-    cols = ["name", "email", "role", "status", "status_raw", "active", "last_activity"]
+    cols = ["name", "email", "role", "status", "status_raw", "active", "terminated",
+            "last_activity", "source", "member_id"]
     with (out_dir / "users.csv").open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -434,124 +788,176 @@ def write_outputs(out_dir, users, meta):
     log(f"  wrote users.csv and users.json ({len(users)} users)")
 
 
-HEAD_FILL = PatternFill("solid", fgColor="1D2433")
-ACTIVE_FILL = PatternFill("solid", fgColor="EFF9F3")
-INACTIVE_FILL = PatternFill("solid", fgColor="FDF3E7")
+BOLD = Font(bold=True)
+HDR_FILL = PatternFill("solid", fgColor="D9E1F2")
+INPUT_FILL = PatternFill("solid", fgColor="FFF2CC")
+TERM_FILL = PatternFill("solid", fgColor="F8CBAD")
+UNKNOWN_FILL = PatternFill("solid", fgColor="FCE4D6")
+ROLES_DOC = ("https://docs.workato.com/en/user-accounts-and-teams/role-based-access/"
+             "new-model/system-environment-roles")
+
+CHECKLIST = [
+    '1. In tab "1. Screenshot and Parameters" - Was a screenshot taken of the parameters '
+    'used to generate the listing which includes the date/time the listing was generated?',
+    '2. In tab "2. User Listing" - Was the listing reviewed and tick-marked for all users '
+    'regardless of whether they are appropriate or not?',
+    '3. If inappropriate access was identified in step 2; Does tab "3. Screenshots and '
+    'Params Re-Run" contain a screenshot of the parameters used to generate the validation '
+    'listing which includes the date/time the listing was generated?',
+    '4. If inappropriate access was identified in step 2; Was a look back performed and '
+    'documented in "Look Back Evidence Tab" to confirm each high risk user deemed '
+    'inappropriate during the QAR did not perform any activities which could be deemed '
+    'inappropriate?',
+    '5. If inappropriate access was identified in step 3; Does tab "User Listing Re-Run" '
+    'contain the full re-ran listing and positive confirmation of all users appropriateness?',
+    '6. Is there sign-off from both the primary reviewer and the secondary reviewer?',
+]
 
 
-def _sheet(wb, title, users, meta, note):
-    ws = wb.create_sheet(title=title[:31])
-    ws["A1"] = f"Workato User Access Review - {meta['period']} - {title}"
-    ws["A1"].font = Font(bold=True, size=14)
-    ws["A2"] = (f"Workspace: {meta['workspace']}   ·   Listed: {meta['captured']}   ·   "
-                f"{len(users)} user(s)")
-    ws["A3"] = note
-    ws["A3"].alignment = Alignment(wrap_text=True)
-    ws.row_dimensions[3].height = 28
-
-    cols = ["Name", "Email", "Role", "Status (as shown)", "Verdict", "Last activity"]
-    for i, c in enumerate(cols, start=1):
-        cell = ws.cell(row=5, column=i, value=c)
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = HEAD_FILL
-    for w, col in zip((26, 34, 22, 22, 14, 18), "ABCDEF"):
-        ws.column_dimensions[col].width = w
-
-    for r, u in enumerate(users, start=6):
-        ws.cell(row=r, column=1, value=u["name"])
-        ws.cell(row=r, column=2, value=u["email"])
-        ws.cell(row=r, column=3, value=u["role"])
-        ws.cell(row=r, column=4, value=u["status_raw"])
-        ws.cell(row=r, column=5, value=u["status"])
-        ws.cell(row=r, column=6, value=u["last_activity"])
-        fill = ACTIVE_FILL if u["active"] else INACTIVE_FILL
-        for c in range(1, 7):
-            ws.cell(row=r, column=c).fill = fill
-    if not users:
-        ws["A6"] = "None."
-    return ws
+def _place_images(ws, shots, row, img_dir, max_width):
+    for c in shots:
+        ws.cell(row=row, column=1, value=c["description"]).font = BOLD
+        ts = datetime.fromisoformat(c["captured"]).strftime("%Y-%m-%d %H:%M:%S %Z")
+        ws.cell(row=row + 1, column=1, value=f"{c['url']}   ·   captured {ts}")
+        img = XLImage(workbook_copy(c["file"], img_dir))
+        if img.width > max_width:
+            k = max_width / img.width
+            img.width, img.height = int(img.width * k), int(img.height * k)
+        ws.add_image(img, f"A{row + 2}")
+        row += 2 + math.ceil(img.height / PX_PER_ROW) + 3
+    return row
 
 
 def build_workbook(manifest_path, out_path, max_width=1400):
+    """The UAR template: checklist, screenshots before, user list, Workday
+    terminations, screenshots after."""
     data = json.loads(Path(manifest_path).read_text())
     users = data["users"]
-    meta = {k: data.get(k, "") for k in ("period", "workspace", "captured", "source_url")}
-
-    active = [u for u in users if u["active"] is True]
-    inactive = [u for u in users if u["active"] is False]
-    unknown = [u for u in users if u["active"] is None]
+    period, ws_name = data.get("period", ""), data.get("workspace", "")
+    checked = bool(data.get("terminations_file"))
+    img_dir = Path(manifest_path).parent / "_workbook_images"
+    listed = (data.get("captured") or "").replace("T", " ")[:19]
 
     wb = Workbook()
     wb.remove(wb.active)
 
-    ws = wb.create_sheet(title="Summary")
-    ws["A1"] = f"Workato User Access Review - {meta['period']}"
-    ws["A1"].font = Font(bold=True, size=16)
-    rows = [
-        ("Workspace", meta["workspace"]),
-        ("Listing taken", meta["captured"]),
-        ("Source page", meta["source_url"]),
-        ("", ""),
-        ("Total collaborators", len(users)),
-        ("Active", len(active)),
-        ("Inactive / suspended", len([u for u in inactive if u["status"] == "inactive"])),
-        ("Pending invitation", len([u for u in inactive if u["status"] == "pending"])),
-        ("Status not recognised", len(unknown)),
-    ]
-    for i, (k, v) in enumerate(rows, start=3):
-        ws.cell(row=i, column=1, value=k).font = Font(bold=bool(k))
+    # 1. Review Checklist ------------------------------------------------------
+    ws = wb.create_sheet("Review Checklist")
+    ws.column_dimensions["A"].width = 110
+    ws.column_dimensions["B"].width = 45
+    head = [("SYSTEM", f"Workato ({ws_name} environment)" if ws_name else "Workato"),
+            ("Period", period), ("Listing taken", listed),
+            ("Source page", data.get("source_url", "")),
+            ("Users listed", len(users)),
+            ("Active", sum(1 for u in users if u["active"] is True)),
+            ("Inactive / suspended", sum(1 for u in users if u["status"] == "inactive")),
+            ("Pending invitation", sum(1 for u in users if u["status"] == "pending")),
+            ("Status not recognised", sum(1 for u in users if u["active"] is None)),
+            ("Terminated, still listed",
+             sum(1 for u in users if u.get("terminated")) if checked else "not checked")]
+    for i, (k, v) in enumerate(head, start=1):
+        ws.cell(row=i, column=1, value=k).font = BOLD
         ws.cell(row=i, column=2, value=v)
-    ws.column_dimensions["A"].width = 26
-    ws.column_dimensions["B"].width = 60
+    r = len(head) + 2
+    ws.cell(row=r, column=1, value="Checklist for QAR Listings").font = BOLD
+    r += 1
+    for q in CHECKLIST:
+        ws.cell(row=r, column=1, value=q).alignment = Alignment(wrap_text=True, vertical="top")
+        ws.cell(row=r, column=2).fill = INPUT_FILL
+        r += 1
+    ws.cell(row=r, column=1, value="Is my QAR Ready?").font = BOLD
+    ws.cell(row=r, column=2).fill = INPUT_FILL
+    ws.cell(row=r + 2, column=1, value="Primary Reviewer Sign Off, Date, and Title")
+    ws.cell(row=r + 2, column=2).fill = INPUT_FILL
+    ws.cell(row=r + 3, column=1, value="Secondary Reviewer Sign Off, Date, and Title")
+    ws.cell(row=r + 3, column=2).fill = INPUT_FILL
+    note = ws.cell(row=r + 5, column=1, value=(
+        f"Point-in-time listing taken {listed} and labelled {period}. Workato publishes no "
+        "historical collaborator list, so this evidences access as it stood when the "
+        "capture ran - not on the last day of the period."))
+    note.alignment = Alignment(wrap_text=True)
+    ws.row_dimensions[r + 5].height = 44
+    if data.get("warnings"):
+        ws.cell(row=r + 7, column=1, value="Capture warnings - resolve before signing off").font = BOLD
+        for i, w in enumerate(data["warnings"], start=r + 8):
+            ws.cell(row=i, column=1, value=w).alignment = Alignment(wrap_text=True)
 
-    n = len(rows) + 4
-    ws.cell(row=n, column=1, value=(
-        "This listing is a point-in-time snapshot taken on the date above and labelled "
-        f"with {meta['period']}. Workato does not publish a historical collaborator list, "
-        "so it evidences access as it stood when the capture ran - not on the last day of "
-        "the period. Each row is evidenced by the screenshots in this workbook."))
-    ws.cell(row=n, column=1).alignment = Alignment(wrap_text=True)
-    ws.row_dimensions[n].height = 60
+    # 2. Parameter Screenshot - Before ---------------------------------------
+    ws = wb.create_sheet("Parameter Screenshot - Before")
+    ws.column_dimensions["A"].width = 200
+    ws["A1"] = (f"Workato collaborators and roles - {ws_name} - captured {listed} "
+                "(the on-screen clock in each image is the date/time evidence)")
+    ws["A1"].font = BOLD
+    before = [c for c in data.get("captures", []) if c.get("tab", "before") == "before"]
+    if before:
+        _place_images(ws, before, 3, img_dir, max_width)
+    else:
+        ws["A3"] = "No screenshots were captured."
 
-    if unknown:
-        m = n + 2
-        ws.cell(row=m, column=1, value=(
-            f"{len(unknown)} user(s) had a status this tool does not recognise. They are "
-            "counted as neither active nor inactive and are listed on the Unrecognised tab. "
-            "Classify them by hand before signing off.")).font = Font(bold=True, color="98600C")
-        ws.cell(row=m, column=1).alignment = Alignment(wrap_text=True)
-        ws.row_dimensions[m].height = 44
+    # 3. User List -------------------------------------------------------------
+    ws = wb.create_sheet("User List")
+    cols = [("Name", 28), ("Email", 34), (f"Access Type ({ws_name})" if ws_name else "Access Type", 30),
+            ("Status (as shown)", 18), ("Verdict", 14), ("Is the user terminated?", 24),
+            ("Access Appropriate?", 22), ("Access Reviewed By", 24), ("Reviewed On", 16),
+            ("Source (platform / page)", 30)]
+    for i, (h, w) in enumerate(cols, start=1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font, c.fill = BOLD, HDR_FILL
+        ws.column_dimensions[c.column_letter].width = w
+    ws.freeze_panes = "A2"
+    for r, u in enumerate(users, start=2):
+        verdict = {"active": "Active", "inactive": "Inactive", "pending": "Pending"}.get(
+            u["status"], "Unrecognised")
+        term = (u.get("terminated") or "Active User") if checked else "not checked"
+        vals = [u["name"], u["email"], u.get("role") or "", u.get("status_raw") or "",
+                verdict, term, None, None, None, u.get("source", "")]
+        for i, v in enumerate(vals, start=1):
+            ws.cell(row=r, column=i, value=v)
+        for i in (7, 8, 9):
+            ws.cell(row=r, column=i).fill = INPUT_FILL
+        if u["active"] is None:
+            ws.cell(row=r, column=5).fill = UNKNOWN_FILL
+        if u.get("terminated"):
+            ws.cell(row=r, column=6).fill = TERM_FILL
+    end = len(users) + 3
+    if not users:
+        ws.cell(row=2, column=1, value=("No users could be read - fill this in from the "
+                                        "Before screenshots. This is not evidence of no users."))
+    ws.cell(row=end, column=1, value=(
+        "Access Type = the role in this environment, from each collaborator's own page where "
+        "it could be read, else as the list shows it. Columns G-I are for the reviewer. A "
+        "user listed on more than one page (Workato and Workato Agentic) appears once per "
+        "page.")).font = Font(italic=True)
 
-    _sheet(wb, "Active", active, meta,
-           "Users this review counts as holding access. Confirm each is still appropriate.")
-    _sheet(wb, "Inactive", [u for u in inactive if u["status"] == "inactive"], meta,
-           "Users shown as deactivated, suspended or disabled. Confirm access really is removed.")
-    _sheet(wb, "Pending", [u for u in inactive if u["status"] == "pending"], meta,
-           "Invitations not yet accepted. Access is not live, but the invitation is outstanding.")
-    if unknown:
-        _sheet(wb, "Unrecognised", unknown, meta,
-               "Status could not be interpreted. Classify by hand - do not assume no access.")
+    # 4. Workday termination List --------------------------------------------
+    ws = wb.create_sheet("Workday termination List")
+    ws["A1"] = "SOX Audit - Terminations"
+    ws["A1"].font = BOLD
+    rows = data.get("termination_rows") or []
+    if rows:
+        ws["A2"] = f"Source: {data.get('terminations_file', '')}"
+        for ri, row in enumerate(rows, start=4):
+            for ci, v in enumerate(row, start=1):
+                c = ws.cell(row=ri, column=ci, value=v)
+                if ri == 4:
+                    c.font, c.fill = BOLD, HDR_FILL
+    else:
+        ws["A2"] = ("Not checked: no terminations list was supplied. Paste the Workday "
+                    "'SOX Audit - Terminations' export here and fill column F of the User "
+                    "List, or set uar_terminations for Workato and prepare again to have it "
+                    "cross-checked automatically.")
 
-    ev = wb.create_sheet(title="Evidence")
-    ev.column_dimensions["A"].width = 200
-    ev["A1"] = f"Screenshots - {meta['period']}"
-    ev["A1"].font = Font(bold=True, size=14)
-    img_dir = Path(manifest_path).parent / "_workbook_images"
-    r = 3
-    for c in data.get("captures", []):
-        ev.cell(row=r, column=1, value=c["description"]).font = Font(bold=True)
-        ev.cell(row=r + 1, column=1, value=c["url"])
-        ts = datetime.fromisoformat(c["captured"]).strftime("%Y-%m-%d %H:%M:%S %Z")
-        ev.cell(row=r + 2, column=1, value=f"Captured: {ts}")
-        img = XLImage(workbook_copy(c["file"], img_dir))
-        if img.width > max_width:
-            scale = max_width / img.width
-            img.width = int(img.width * scale)
-            img.height = int(img.height * scale)
-        ev.add_image(img, f"A{r + 3}")
-        r = r + 3 + math.ceil(img.height / PX_PER_ROW) + 3
-    if r == 3:
-        ev["A3"] = "No screenshots were captured."
+    # 5. Parameter Screenshot - After ----------------------------------------
+    ws = wb.create_sheet("Parameter Screenshot - After")
+    ws.column_dimensions["A"].width = 200
+    after = [c for c in data.get("captures", []) if c.get("tab") == "after"]
+    if after:
+        r = _place_images(ws, after, 1, img_dir, max_width)
+    else:
+        ws["A1"] = ("NA - no inappropriate access identified; no re-run required. "
+                    "(Replace with re-run screenshots if applicable.)")
+        r = 3
+    ws.cell(row=r + 1, column=1, value=f"Additional Details: {ROLES_DOC}")
 
     wb.save(out_path)
     log(f"Workbook written: {out_path}")
@@ -586,7 +992,7 @@ def run(args, out_dir):
 
         phase("capturing", "collaborators")
         cap = UarCapture(page, out_dir, args.settle, args.workspace, args.display,
-                         args.max_parts)
+                         args.max_parts, args.max_pages)
 
         url = cap.find_members_page()
         if not url:
@@ -595,7 +1001,7 @@ def run(args, out_dir):
             manifest.write_text(json.dumps({
                 "period": args.period, "workspace": args.workspace,
                 "captured": now_stamp().isoformat(), "source_url": "",
-                "users": [], "captures": cap.manifest,
+                "users": [], "captures": cap.manifest, "pages": [],
                 "rejected": cap.rejected,
                 "warnings": cap.warnings + [
                     "No collaborator roster could be found at any known URL. No user "
@@ -618,18 +1024,35 @@ def run(args, out_dir):
             cap.warn("the page opened but no collaborator rows could be read - the listing "
                      "may be rendered in a way this tool does not understand. Check the "
                      "screenshots; do not read this as an empty user list.")
+        elif not args.no_detail:
+            phase("capturing", "collaborator roles")
+            cap.details(users, args.max_detail)
+
+        pages = [{"label": "Workato collaborators", "url": url}]
+        for pg in args.pages:
+            phase("capturing", pg["label"])
+            users += cap.extra_page(pg)
+            pages.append(pg)
+
+        if args.term_map is not None:
+            apply_terminations(users, args.term_map, cap.warn)
 
         meta = {
             "period": args.period,
             "workspace": args.workspace,
             "captured": now_stamp().isoformat(),
             "source_url": url,
+            "pages": pages,
+            "terminations_file": Path(args.terminations).name if args.terminations else "",
         }
         write_outputs(out_dir, users, meta)
 
         manifest = out_dir / "manifest.json"
         manifest.write_text(json.dumps({
             **meta, "users": users, "captures": cap.manifest, "warnings": cap.warnings,
+            # The Workday rows go to the workbook only. users.json is the listing
+            # of who has access; it has no reason to carry who left the company.
+            "termination_rows": args.term_rows,
         }, indent=2))
         log(f"Manifest written: {manifest} ({len(cap.manifest)} screenshots)")
 
@@ -638,6 +1061,9 @@ def run(args, out_dir):
         unknown = sum(1 for u in users if u["active"] is None)
         log(f"Users: {len(users)} total · {active} active · {inactive} inactive/pending "
             f"· {unknown} unrecognised")
+        if args.term_map is not None:
+            gone = sum(1 for u in users if u["terminated"])
+            log(f"Terminations: {len(args.term_map)} on the Workday list, {gone} still listed here")
 
         if cap.warnings:
             print("\n==== WARNINGS - resolve these before signing off ====")
@@ -659,7 +1085,19 @@ def main():
     ap.add_argument("--workspace", default="Production")
     ap.add_argument("--display", type=int, default=1)
     ap.add_argument("--max-parts", type=int, default=12,
-                    help="max scrolled screens of the user list")
+                    help="max scrolled screens per page of the user list")
+    ap.add_argument("--max-pages", type=int, default=20,
+                    help="max pages followed on a paginated user list")
+    ap.add_argument("--no-detail", action="store_true",
+                    help="skip each collaborator's own page (roles as the list shows them)")
+    ap.add_argument("--max-detail", type=int, default=60,
+                    help="max collaborator pages read for their environment role")
+    ap.add_argument("--terminations", default="",
+                    help="Workday 'SOX Audit - Terminations' export (.csv or .xlsx); "
+                         "default: the environment's uar_terminations setting")
+    ap.add_argument("--pages", default="",
+                    help='further access pages, "Label|URL; Label|URL"; '
+                         "default: the environment's uar_pages setting")
     ap.add_argument("--capture-only", action="store_true")
     ap.add_argument("--build-only", action="store_true")
     ap.add_argument("--no-pause", action="store_true")
@@ -672,8 +1110,9 @@ def main():
 
     args.password = ""
     args.login = "interactive"
+    cfg = {}
     try:
-        cfg = environments.find(args.env)
+        cfg = environments.find(args.env) or {}
         if cfg and cfg.get("enabled"):
             args.username = args.username or cfg.get("username", "")
             args.password = cfg.get("password", "")
@@ -682,6 +1121,23 @@ def main():
                 args.workspace = cfg["workspace"]
     except Exception as exc:
         log(f"!! environments.yaml could not be read ({exc}); signing in by hand.")
+
+    # A run from the page cannot pass these, so the environment's config (Doppler
+    # or the YAML) supplies them; a flag on the command line wins.
+    args.pages = parse_pages(args.pages or cfg.get("uar_pages", ""))
+    args.terminations = str(args.terminations or cfg.get("uar_terminations", "") or "").strip()
+    args.term_rows, args.term_map = [], None
+    if args.terminations:
+        try:
+            args.term_rows, args.term_map = load_terminations(args.terminations)
+            log(f"Terminations list: {Path(args.terminations).name}, "
+                f"{len(args.term_map)} email(s)")
+        except Exception as exc:
+            # Not fatal: the roster is still worth capturing. But the check did not
+            # happen, and the workbook must say "not checked", not "Active User".
+            log(f"!! terminations list {args.terminations!r} could not be read ({exc}); "
+                f"the review continues without the cross-check")
+            args.terminations = ""
 
     out_dir = Path(args.out) if args.out else Path(
         f"uar_{slug(args.period)}_{datetime.now().strftime('%Y%m%d-%H%M%S')}")
