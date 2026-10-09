@@ -21,13 +21,45 @@ already phrased the way users ask them. Those FAQ chunks do most of the work.
 
 WHEN A MODEL IS CONFIGURED
 --------------------------
-Set ANTHROPIC_API_KEY (environment, or a Doppler secret) and answers are composed
-by Claude *from the retrieved sections only*, still with citations, still refusing
+With a model key (environment, or a Doppler secret) answers are composed by the
+model *from the retrieved sections only*, still with citations, still refusing
 when the sections do not cover the question. Retrieval runs first either way, so
 the model never sees the question without the evidence, and any failure - no key,
-timeout, bad response - falls back to the extractive answer rather than to an
-apology. ASSISTANT_MODEL picks the model; the default is the cheapest one that
-does this job well.
+timeout, bad response, unknown model - falls back to the extractive answer rather
+than to an apology.
+
+  - OpenAI first: OPENAI_API_KEY, else OPENAI_SA_KEY (the name it has in this
+    project's Doppler). OPENAI_MODEL_NAME picks the model. A value that is not a
+    model id - Doppler currently holds the placeholder "SOC1_MODEL" - is reported
+    by /api/ask and replaced by OPENAI_DEFAULT_MODEL rather than sent upstream to
+    fail on every question.
+  - Anthropic otherwise: ANTHROPIC_API_KEY, model from ASSISTANT_MODEL.
+
+THE CONVERSATION
+----------------
+The page sends the last few turns with each question. They do two jobs: a
+follow-up the guide cannot place alone ("and for quarterly ones?") is retrieved
+together with the question before it, and a model reads them so it can answer in
+context. They never become evidence - the sections are re-retrieved each turn and
+the model is told to answer from those only, so a wrong earlier answer cannot be
+cited back as fact. Greetings and thanks get a short reply instead of a refusal.
+Nothing is stored; the page holds the history and loses it on reload.
+
+THE PASSWORD POLICY REFERENCE
+-----------------------------
+The guide describes a "Password Policy Alignment" check that compares systems
+against the corporate password policy, but it does not contain that policy, so
+"what is the minimum length?" used to end in a refusal with nowhere to go.
+CW_PASSWORD_POLICY_DOC (environment, or a Doppler secret) names the policy:
+
+  - an http(s) URL: password questions carry a link to it. It is not fetched.
+    Policy pages sit behind SSO, and a server that fetches whatever URL its
+    configuration names is a server that can be pointed at the network.
+  - a .md or .txt path (absolute, or relative to the docs folder): it is also
+    indexed, so its content answers and is cited like the guide's.
+
+Unset, or set to something unusable, it changes nothing: no reference is better
+than a link that goes nowhere. CW_PASSWORD_POLICY_TITLE sets the link text.
 """
 
 import json
@@ -38,10 +70,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import logging
 from pathlib import Path
 
 DOCS = Path(os.environ.get("ASSISTANT_DOCS", "/docs"))
 MODEL = os.environ.get("ASSISTANT_MODEL", "claude-haiku-4-5-20251001")
+OPENAI_DEFAULT_MODEL = os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-5.4-mini")
 TIMEOUT_S = float(os.environ.get("ASSISTANT_TIMEOUT", "20"))
 
 MAX_CHUNK = 1800          # characters; longer sections are split on paragraphs
@@ -85,8 +119,71 @@ SYNONYMS = {
     "bot": ["chatbot", "assistant"], "chatbot": ["assistant"],
 }
 
+_log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _index = {"chunks": [], "df": {}, "avglen": 1.0, "stamp": None}
+
+
+POLICY_VAR = "CW_PASSWORD_POLICY_DOC"
+POLICY_TITLE = os.environ.get("CW_PASSWORD_POLICY_TITLE", "CoreWeave Password Policy")
+
+# A question touching any of these is a password-policy question, and gets the
+# policy as a reference whether or not the guide could answer it.
+POLICY_TERMS = {
+    "password", "passwords", "passphrase", "passphrases", "complexity",
+    "expiry", "expire", "expiration", "rotation", "rotate", "lockout",
+    "mfa", "2fa", "multifactor", "credential", "credentials",
+}
+
+
+def _setting(name):
+    """A setting from the environment, else from Doppler; '' when absent."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    try:                                   # Doppler is this project's secret store
+        from . import doppler
+        if doppler.configured():
+            return str((doppler.fetch() or {}).get(name, "") or "").strip()
+    except Exception:                      # noqa: BLE001 - never block an answer
+        pass
+    return ""
+
+
+def policy():
+    """The configured password policy, or None.
+
+    None also for a value that cannot be used - a file that is not there, a type
+    that is not text, a scheme that is not http(s) - because a reference the
+    reader cannot follow is worse than none.
+    """
+    val = _setting(POLICY_VAR)
+    if not val:
+        return None
+    if re.match(r"^https?://\S+$", val, re.I):
+        return {"title": POLICY_TITLE, "kind": "url", "url": val}
+    if "://" in val:
+        return None                        # javascript:, file:, ftp: - never linked
+    path = Path(val)
+    if not path.is_absolute():
+        path = DOCS / path
+    try:
+        if path.is_file() and path.suffix.lower() in (".md", ".txt"):
+            return {"title": POLICY_TITLE, "kind": "file", "path": path,
+                    "doc": path.name}
+    except OSError:
+        pass
+    return None
+
+
+def _reference(pol):
+    """What the page is told about the policy - never the container path."""
+    ref = {"title": pol["title"], "kind": pol["kind"]}
+    if pol["kind"] == "url":
+        ref["url"] = pol["url"]
+    else:
+        ref["doc"] = pol["doc"]
+    return ref
 
 
 # ------------------------------------------------------------------ indexing
@@ -195,21 +292,42 @@ def _wrap(heading, body):
     return out
 
 
+def _sources_on_disk():
+    """(path, is_policy) for everything the index is built from."""
+    found = [(p, False) for p in sorted(DOCS.glob("*.md"))] if DOCS.is_dir() else []
+    pol = policy()
+    if pol and pol["kind"] == "file":
+        target = pol["path"].resolve()
+        # A policy that already lives in docs/ is indexed once, flagged as policy.
+        found = [(p, p.resolve() == target or flag) for p, flag in found]
+        if not any(p.resolve() == target for p, _ in found):
+            found.append((pol["path"], True))
+    return found
+
+
 def _stamp():
-    if not DOCS.is_dir():
-        return None
-    return tuple(sorted((p.name, p.stat().st_mtime, p.stat().st_size)
-                        for p in DOCS.glob("*.md")))
+    out = []
+    for p, flag in _sources_on_disk():
+        try:
+            st = p.stat()
+            out.append((str(p), flag, st.st_mtime, st.st_size))
+        except OSError:
+            continue
+    # The setting itself is part of the stamp: switching it from a URL to a file
+    # must rebuild even though no file under docs/ changed.
+    return tuple(sorted(out)) + (("policy", _setting(POLICY_VAR)),)
 
 
 def _build():
     chunks = []
-    for path in sorted(DOCS.glob("*.md")):
+    for path, is_policy in _sources_on_disk():
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         title, sections = _split_sections(text)
+        if is_policy:
+            title = POLICY_TITLE
         for heading, body in sections:
             if "**Q:" in body:
                 made = _faq_chunks(heading, body)
@@ -218,6 +336,9 @@ def _build():
             for c in made:
                 c["doc"] = path.name
                 c["title"] = title or path.stem
+                c["policy"] = is_policy
+                if is_policy and not c["heading"]:
+                    c["heading"] = POLICY_TITLE     # a .txt has no headings
                 # The heading and the question are the strongest signal of what a
                 # chunk is about, so they are indexed as well as the body.
                 c["terms"] = _tokens(c["heading"] + " " + c["question"] + " " + c["text"])
@@ -317,14 +438,15 @@ def _trim(text, limit=900):
 GUIDE_ENGINE = "guide retrieval"
 
 
-def _engine(model=None):
-    return {"engine": "claude" if model else "guide",
-            "model": model or GUIDE_ENGINE}
+def _engine(provider=None):
+    if not provider:
+        return {"engine": "guide", "model": GUIDE_ENGINE}
+    return {"engine": provider["engine"], "model": provider["model"]}
 
 
 def _source(c):
     return {"doc": c["doc"], "heading": c["heading"],
-            "question": c.get("question", "")}
+            "question": c.get("question", ""), "policy": bool(c.get("policy"))}
 
 
 NO_ANSWER = ("That is not covered in the Compliance Partner guide. "
@@ -343,47 +465,110 @@ def _extractive(question, hits, coverage):
 
 # ------------------------------------------------------------- optional model
 
-def _api_key():
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+# A model id: lowercase, digits, dots, dashes, colons - "gpt-5.4-mini",
+# "claude-haiku-4-5", "ft:gpt-4.1-mini:org::id". Not an UPPER_SNAKE setting name.
+_MODEL_ID = re.compile(r"^[a-z0-9][a-z0-9._:-]{1,100}$")
+
+
+def _openai_model():
+    """(model, note). note explains a configured value that was not used."""
+    val = _setting("OPENAI_MODEL_NAME")
+    if not val:
+        return OPENAI_DEFAULT_MODEL, ""
+    if _MODEL_ID.match(val):
+        return val, ""
+    return OPENAI_DEFAULT_MODEL, (
+        f"OPENAI_MODEL_NAME is not a model id; using {OPENAI_DEFAULT_MODEL}")
+
+
+def provider():
+    """The model that writes answers, or None for guide retrieval only."""
+    key = _setting("OPENAI_API_KEY") or _setting("OPENAI_SA_KEY")
     if key:
-        return key
-    try:                                   # Doppler is this project's secret store
-        from . import doppler
-        if doppler.configured():
-            return (doppler.fetch() or {}).get("ANTHROPIC_API_KEY", "").strip()
-    except Exception:                      # noqa: BLE001 - never block an answer
-        pass
-    return ""
+        model, note = _openai_model()
+        return {"engine": "openai", "model": model, "key": key, "note": note}
+    key = _setting("ANTHROPIC_API_KEY")
+    if key:
+        return {"engine": "claude", "model": MODEL, "key": key, "note": ""}
+    return None
 
 
 SYSTEM = (
     "You are the Compliance Partner Assistant for CoreWeave employees.\n"
-    "Answer ONLY from the guide sections provided in the user message.\n"
+    "Answer ONLY from the sections provided in the user message: the Compliance "
+    "Partner guide and, where present, the CoreWeave password policy.\n"
     "- Use the exact button, tab and control names as written.\n"
     "- If the sections do not answer the question, reply exactly: " + NO_ANSWER + "\n"
     "- Never state a due date, control name or behaviour that is not in the sections.\n"
     "- Never claim the app creates Jira tickets or changes source systems.\n"
     "- Remind the user that humans own all decisions only when they ask about "
     "validation, sign-off or AI-generated content.\n"
-    "- Two or three sentences. No preamble, no markdown headings."
+    "- Earlier turns of the conversation are context for what the user means, "
+    "not evidence. Answer only from the sections in the latest message.\n"
+    "- Two or three sentences, or a short numbered list for steps. No preamble, "
+    "no markdown headings."
 )
 
 
-def _llm(question, hits, key):
+def _messages(question, hits, history):
+    """The conversation as alternating user/assistant turns, ending with the
+    question and the sections retrieved for it."""
     ctx = "\n\n".join(
         f"[{c['doc']} > {c['heading']}]\n" + (f"Q: {c['question']}\n" if c["question"] else "")
         + c["text"] for c in hits)
-    payload = json.dumps({
-        "model": MODEL, "max_tokens": 600, "system": SYSTEM,
-        "messages": [{"role": "user",
-                      "content": f"Guide sections:\n\n{ctx}\n\nQuestion: {question}"}],
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages", data=payload, method="POST",
-        headers={"content-type": "application/json", "x-api-key": key,
-                 "anthropic-version": "2023-06-01"})
+    msgs = []
+    for turn in history:
+        if msgs and msgs[-1]["role"] == turn["role"]:
+            msgs[-1]["content"] += "\n\n" + turn["text"]
+        else:
+            msgs.append({"role": turn["role"], "content": turn["text"]})
+    while msgs and msgs[0]["role"] != "user":
+        msgs.pop(0)                        # both APIs want the user to open
+    if msgs and msgs[-1]["role"] == "user":
+        msgs.append({"role": "assistant", "content": "(no answer)"})
+    msgs.append({"role": "user",
+                 "content": f"Guide sections:\n\n{ctx}\n\nQuestion: {question}"})
+    return msgs
+
+
+def _post(url, payload, headers):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 method="POST",
+                                 headers=dict({"content-type": "application/json"},
+                                              **headers))
     with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
-        body = json.loads(r.read().decode())
+        return json.loads(r.read().decode())
+
+
+def _why(exc):
+    """A failure as something an operator can act on - "HTTP 429
+    credit_balance_exhausted", not a bare 429. The body is the provider's error
+    object; the key is never in it."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            err = json.loads(exc.read().decode()).get("error") or {}
+            code = err.get("code") or err.get("type") or ""
+        except Exception:                  # noqa: BLE001
+            code = ""
+        return f"HTTP {exc.code} {code}".strip()
+    return type(exc).__name__
+
+
+def _llm(question, hits, prov, history=()):
+    msgs = _messages(question, hits, history)
+    if prov["engine"] == "openai":
+        # max_completion_tokens, not max_tokens: the GPT-5 models reject the old
+        # name, and reasoning counts against it, so it is generous.
+        body = _post("https://api.openai.com/v1/chat/completions", {
+            "model": prov["model"], "max_completion_tokens": 2000,
+            "messages": [{"role": "system", "content": SYSTEM}] + msgs,
+        }, {"authorization": f"Bearer {prov['key']}"})
+        choices = body.get("choices") or [{}]
+        return str((choices[0].get("message") or {}).get("content") or "").strip()
+    body = _post("https://api.anthropic.com/v1/messages", {
+        "model": prov["model"], "max_tokens": 600, "system": SYSTEM,
+        "messages": msgs,
+    }, {"x-api-key": prov["key"], "anthropic-version": "2023-06-01"})
     parts = [b.get("text", "") for b in body.get("content", []) if b.get("type") == "text"]
     return "".join(parts).strip()
 
@@ -437,24 +622,92 @@ def starters(limit=4):
 
 def configured():
     idx = index()
-    model = MODEL if _api_key() else None
-    return {"docs": sorted({c["doc"] for c in idx["chunks"]}),
-            "sections": len(idx["chunks"]),
-            "model": model or GUIDE_ENGINE,
-            "engine": "claude" if model else "guide",
-            "intro": _intro(idx["chunks"]),
-            "starters": starters()}
+    prov = provider()
+    out = dict({"docs": sorted({c["doc"] for c in idx["chunks"]}),
+                "sections": len(idx["chunks"]),
+                "intro": _intro(idx["chunks"]),
+                "starters": starters(),
+                "policy": _reference(policy()) if policy() else None},
+               **_engine(prov))
+    if prov and prov["note"]:
+        out["note"] = prov["note"]
+    return out
 
 
-def ask(question):
+NO_ANSWER_POLICY = ("The Compliance Partner guide does not cover that. For password "
+                    "requirements, the {title} is the reference.")
+
+
+MAX_TURNS = 8                # earlier turns the page may send
+MAX_TURN_CHARS = 1500
+
+
+def _history(raw):
+    """The page's turns, cleaned: known roles, bounded length, newest last."""
+    out = []
+    for t in (raw if isinstance(raw, list) else [])[-MAX_TURNS:]:
+        if not isinstance(t, dict):
+            continue
+        role = {"user": "user", "you": "user",
+                "assistant": "assistant", "bot": "assistant"}.get(str(t.get("role")))
+        text = str(t.get("text") or "").strip()[:MAX_TURN_CHARS]
+        if role and text:
+            out.append({"role": role, "text": text})
+    return out
+
+
+# Conversation, not questions. Answered politely instead of with "that is not
+# covered in the guide", which is true and useless.
+SMALLTALK = {
+    "hi": "Hello! Ask me anything about Compliance Partner.",
+    "hello": "Hello! Ask me anything about Compliance Partner.",
+    "hey": "Hello! Ask me anything about Compliance Partner.",
+    "thanks": "You're welcome. Anything else about Compliance Partner?",
+    "thank you": "You're welcome. Anything else about Compliance Partner?",
+    "thx": "You're welcome. Anything else about Compliance Partner?",
+    "ok": "Anything else about Compliance Partner?",
+    "okay": "Anything else about Compliance Partner?",
+    "bye": "Goodbye. The owl is here when you need it.",
+}
+
+
+def ask(question, history=None):
+    """An answer, plus the password policy as a reference when it applies."""
+    result = _answer(question, _history(history))
+    pol = policy()
+    if not pol or result.get("mode") == "empty":
+        return result
+    about_passwords = bool(POLICY_TERMS & set(_tokens(question or "")))
+    cited = any(s.get("policy") for s in result.get("sources", []))
+    if not (about_passwords or cited):
+        return result
+    result["references"] = [_reference(pol)]
+    if result.get("mode") == "unknown" and about_passwords:
+        # Not a dead end any more: there is somewhere to go for this one.
+        result["answer"] = NO_ANSWER_POLICY.format(title=pol["title"])
+    return result
+
+
+def _answer(question, history=()):
     question = (question or "").strip()
     if not question:
         return dict({"answer": "Ask me anything about Compliance Partner.",
                      "sources": [], "mode": "empty", "confidence": 0.0}, **_engine())
     if len(question) > 500:
         question = question[:500]
+    chat = SMALLTALK.get(re.sub(r"[^a-z ]", "", question.lower()).strip())
+    if chat:
+        return dict({"answer": chat, "sources": [], "mode": "empty",
+                     "confidence": 0.0}, **_engine())
 
     hits, coverage = search(question)
+    # A follow-up often names no topic of its own ("and quarterly ones?"). Read it
+    # with the question before it, and keep whichever retrieval explains more.
+    prior = [t["text"] for t in history if t["role"] == "user"]
+    if prior and coverage < 0.67:
+        more, cov = search(prior[-1] + " " + question)
+        if more and cov > coverage:
+            hits, coverage = more, cov
     # Below this the best section shares almost nothing with the question, and
     # answering from it would be answering a question nobody asked.
     if not hits or coverage < 0.34:
@@ -463,14 +716,14 @@ def ask(question):
         return dict({"answer": NO_ANSWER, "sources": [_source(c) for c in hits[:2]],
                      "mode": "unknown", "confidence": round(coverage, 2)}, **_engine())
 
-    key = _api_key()
-    if key:
+    prov = provider()
+    if prov:
         try:
-            text = _llm(question, hits, key)
+            text = _llm(question, hits, prov, history)
             if text:
                 return dict({"answer": text, "sources": [_source(c) for c in hits[:3]],
-                             "mode": "claude", "confidence": round(coverage, 2)},
-                            **_engine(MODEL))
-        except Exception:                  # noqa: BLE001 - fall back, never fail
-            pass
+                             "mode": prov["engine"], "confidence": round(coverage, 2)},
+                            **_engine(prov))
+        except Exception as exc:           # noqa: BLE001 - fall back, never fail
+            _log.warning("assistant model %s failed: %s", prov["model"], _why(exc))
     return _extractive(question, hits, coverage)

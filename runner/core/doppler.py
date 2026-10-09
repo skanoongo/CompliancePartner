@@ -126,7 +126,8 @@ SECRET_NAME_PARTS = ("password", "secret", "token", "passkey", "api_key",
 
 def is_secret_name(name):
     n = str(name).lower()
-    return any(part in n for part in SECRET_NAME_PARTS)
+    # "..._KEY" too: OPENAI_SA_KEY is an API key whose name has no "api_key" in it.
+    return any(part in n for part in SECRET_NAME_PARTS) or n.endswith("_key")
 
 
 def all_values():

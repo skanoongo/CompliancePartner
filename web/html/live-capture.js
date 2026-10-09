@@ -921,9 +921,10 @@
   // ------------------------------------------------------------- help assistant
   //
   // The sidebar owl opens a chat panel that answers from docs/. The answering is
-  // done by the runner (/api/ask), not here, and by default it is retrieval over
-  // the guide rather than a generative model - see runner/core/assistant.py for
-  // why that is the default for a tool people consult about SOX controls.
+  // done by the runner (/api/ask), not here. Without a model key it is retrieval
+  // over the guide; with one (OpenAI or Anthropic, from Doppler) a model writes
+  // the answer from the retrieved sections - see runner/core/assistant.py. Each
+  // question carries the recent turns so follow-ups are understood in context.
   //
   // Everything degrades: no runner, or an assistant with no docs indexed, and the
   // button falls back to the prototype's own guide modal instead of opening a
@@ -931,6 +932,20 @@
 
   let ASSIST = null;                 // null until /api/ask reports in
   const history = [];                // this page session only; nothing is stored
+
+  // The turns sent with a question: answered ones only, never a refusal or an
+  // error (a model reading "not covered" back tends to repeat it), newest last.
+  function context() {
+    const out = [];
+    for (const t of history) {
+      if (t.pending) continue;
+      if (t.role === 'you') out.push({ role: 'user', text: t.text });
+      else if (t.mode !== 'unknown' && t.mode !== 'error') {
+        out.push({ role: 'assistant', text: t.text });
+      }
+    }
+    return out.slice(-8);
+  }
 
   // The opening screen is the guide's, not the page's: /api/ask serves an intro
   // taken from the guide's description of itself and starter questions taken
@@ -998,11 +1013,31 @@
     return seen.slice(0, 2);
   }
 
+  // "For more information" - the password policy, when the runner attached it.
+  // The URL is checked again here although the runner already refuses anything
+  // but http(s): this is the line that puts it in an href.
+  function references(turn) {
+    const out = [];
+    for (const r of (turn.references || [])) {
+      if (r.kind === 'url' && /^https?:\/\//i.test(r.url || '')) {
+        out.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">`
+                 + `${esc(r.title)} &#8599;</a>`);
+      } else if (r.kind === 'file' && r.title) {
+        out.push(esc(r.title));
+      }
+    }
+    if (!out.length) return '';
+    return `<div class="cp-chat-ref">For more information: ${out.join(' &middot; ')}</div>`;
+  }
+
   // Shown on every answer: the sections a reader can check it against, and what
   // turned them into this reply.
   function footer(turn) {
     const bits = [];
-    const names = sourceLine(turn.sources);
+    // On a refusal the sources are only the nearest misses. Printing them as
+    // "From ..." would credit a section with an answer it did not give.
+    const refused = turn.mode === 'unknown' || turn.mode === 'error';
+    const names = refused ? null : sourceLine(turn.sources);
     if (names && names.length) bits.push('From ' + names.map(esc).join(' &middot; '));
     const eng = engineOf(turn);
     if (eng) bits.push(esc(eng));
@@ -1053,7 +1088,7 @@
       } else {
         const unknown = turn.mode === 'unknown' || turn.mode === 'error';
         html += `<div class="cp-turn bot"><div class="cp-bub ${unknown ? 'cp-unknown' : ''}">
-                   ${fmt(turn.text)}${footer(turn)}</div></div>`;
+                   ${fmt(turn.text)}${references(turn)}${footer(turn)}</div></div>`;
       }
     }
     log.innerHTML = html;
@@ -1066,13 +1101,14 @@
   async function send(text) {
     text = String(text || '').trim();
     if (!text) return;
+    const prior = context();
     history.push({ role: 'you', text });
     const pending = { role: 'bot', pending: true };
     history.push(pending);
     draw();
 
     const { ok, body } = await api('/api/ask', {
-      method: 'POST', body: JSON.stringify({ question: text })
+      method: 'POST', body: JSON.stringify({ question: text, history: prior })
     }).catch(() => ({ ok: false, body: null }));
 
     const i = history.indexOf(pending);
@@ -1081,7 +1117,8 @@
       sources: [], mode: 'error'
     };
     history[i] = { role: 'bot', text: answer.answer, sources: answer.sources,
-                   mode: answer.mode, model: answer.model, engine: answer.engine };
+                   mode: answer.mode, model: answer.model, engine: answer.engine,
+                   references: answer.references || [] };
     draw();
     const input = document.getElementById('cpChatInput');
     if (input) input.focus();
@@ -1114,7 +1151,7 @@
     };
     const mode = el.querySelector('#cpChatMode');
     if (mode && ASSIST) {
-      mode.textContent = ASSIST.engine === 'claude'
+      mode.textContent = (ASSIST.engine && ASSIST.engine !== 'guide')
         ? 'From the guide, written by ' + ASSIST.model
         : 'Answers from the guide';
     }
