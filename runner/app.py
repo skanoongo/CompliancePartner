@@ -413,7 +413,7 @@ def api_ask():
     body = request.get_json(silent=True) or {}
     question = str(body.get("question") or "")
     try:
-        return jsonify(assistant.ask(question))
+        return jsonify(assistant.ask(question, body.get("history")))
     except Exception as exc:              # noqa: BLE001 - help must not 500
         app.logger.warning("assistant failed: %s", exc)
         return jsonify({

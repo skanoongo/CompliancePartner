@@ -921,9 +921,10 @@
   // ------------------------------------------------------------- help assistant
   //
   // The sidebar owl opens a chat panel that answers from docs/. The answering is
-  // done by the runner (/api/ask), not here, and by default it is retrieval over
-  // the guide rather than a generative model - see runner/core/assistant.py for
-  // why that is the default for a tool people consult about SOX controls.
+  // done by the runner (/api/ask), not here. Without a model key it is retrieval
+  // over the guide; with one (OpenAI or Anthropic, from Doppler) a model writes
+  // the answer from the retrieved sections - see runner/core/assistant.py. Each
+  // question carries the recent turns so follow-ups are understood in context.
   //
   // Everything degrades: no runner, or an assistant with no docs indexed, and the
   // button falls back to the prototype's own guide modal instead of opening a
@@ -931,6 +932,20 @@
 
   let ASSIST = null;                 // null until /api/ask reports in
   const history = [];                // this page session only; nothing is stored
+
+  // The turns sent with a question: answered ones only, never a refusal or an
+  // error (a model reading "not covered" back tends to repeat it), newest last.
+  function context() {
+    const out = [];
+    for (const t of history) {
+      if (t.pending) continue;
+      if (t.role === 'you') out.push({ role: 'user', text: t.text });
+      else if (t.mode !== 'unknown' && t.mode !== 'error') {
+        out.push({ role: 'assistant', text: t.text });
+      }
+    }
+    return out.slice(-8);
+  }
 
   // The opening screen is the guide's, not the page's: /api/ask serves an intro
   // taken from the guide's description of itself and starter questions taken
@@ -1086,13 +1101,14 @@
   async function send(text) {
     text = String(text || '').trim();
     if (!text) return;
+    const prior = context();
     history.push({ role: 'you', text });
     const pending = { role: 'bot', pending: true };
     history.push(pending);
     draw();
 
     const { ok, body } = await api('/api/ask', {
-      method: 'POST', body: JSON.stringify({ question: text })
+      method: 'POST', body: JSON.stringify({ question: text, history: prior })
     }).catch(() => ({ ok: false, body: null }));
 
     const i = history.indexOf(pending);
@@ -1135,7 +1151,7 @@
     };
     const mode = el.querySelector('#cpChatMode');
     if (mode && ASSIST) {
-      mode.textContent = ASSIST.engine === 'claude'
+      mode.textContent = (ASSIST.engine && ASSIST.engine !== 'guide')
         ? 'From the guide, written by ' + ASSIST.model
         : 'Answers from the guide';
     }
