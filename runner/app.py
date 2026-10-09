@@ -185,6 +185,11 @@ def _collect_artifacts(job):
                 "inactive": sum(1 for u in rows if u.get("status") == "inactive"),
                 "pending": sum(1 for u in rows if u.get("status") == "pending"),
                 "unknown": sum(1 for u in rows if u.get("active") is None),
+                # None, not 0, when no Workday list was supplied: "0 terminated
+                # users still listed" is a finding, "not checked" is not one.
+                "terminated": (sum(1 for u in rows if u.get("terminated"))
+                               if data.get("terminations_file") else None),
+                "terminationsFile": data.get("terminations_file", ""),
                 "period": data.get("period", ""),
                 "workspace": data.get("workspace", ""),
                 "capturedAt": data.get("captured", ""),

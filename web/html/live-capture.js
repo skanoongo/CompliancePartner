@@ -142,7 +142,10 @@
       ['Active', u.active, 'good'],
       ['Inactive / suspended', u.inactive, ''],
       ['Pending invitation', u.pending, ''],
-    ].concat(u.unknown ? [['Status unrecognised', u.unknown, 'warn']] : []);
+    ].concat(u.unknown ? [['Status unrecognised', u.unknown, 'warn']] : [])
+     .concat(u.terminated == null ? []
+       : [['Terminated, still listed', u.terminated, u.terminated ? 'warn' : 'good']]);
+    const checked = u.terminated != null;
 
     const shown = (u.rows || []).slice(0, USER_ROWS_SHOWN);
     const more = (u.rows || []).length - shown.length;
@@ -158,6 +161,8 @@
                 <td>${esc(r.role || '')}</td>
                 <td>${esc(r.status_raw || '—')}</td>
                 <td><span class="cp-pill cp-${cls}">${verdict}</span></td>
+                ${checked ? `<td>${r.terminated
+                  ? `<span class="cp-pill cp-unknown">Terminated ${esc(r.terminated)}</span>` : '—'}</td>` : ''}
               </tr>`;
     }).join('');
 
@@ -167,12 +172,15 @@
           ${tiles.map(([k, v, c]) => `<div class="cp-tile ${c}"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}
         </div>
         ${u.total ? `<div class="cp-tablewrap"><table class="cp-utable">
-            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status as shown</th><th>Verdict</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status as shown</th><th>Verdict</th>${checked ? '<th>Workday</th>' : ''}</tr></thead>
             <tbody>${body}</tbody></table></div>
           ${more > 0 ? `<p class="sub">${more} more in the workbook and users.csv.</p>` : ''}`
         : `<div class="notice amber" style="margin-top:14px"><strong>No collaborators could be read</strong><br>
              The page opened but no rows were recognised. Check the screenshots - this is
              not evidence that the workspace has no users.</div>`}
+        <p class="sub">${checked
+          ? `Cross-checked against the Workday terminations list ${esc(u.terminationsFile)}.`
+          : 'Not checked against Workday terminations: no list is configured for Workato (uar_terminations).'}</p>
         <p class="sub">Point-in-time listing taken ${esc((u.capturedAt || '').replace('T', ' ').slice(0, 19))}
         and labelled ${esc(u.period || '')}. Workato publishes no historical roster, so this
         evidences access as it stood when the capture ran.</p>

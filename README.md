@@ -16,7 +16,16 @@ version history, screenshots each one, and builds an Excel workbook from what it
 **User access review** opens the workspace's collaborator listing and reads who has
 access: name, email, role and the status exactly as the page showed it, split into
 active, inactive/suspended and pending. The listing appears on the page itself, and
-downloads as `users.csv`, `users.json` and a workbook with a tab per bucket.
+downloads as `users.csv`, `users.json` and a workbook in the UAR template's five
+tabs: Review Checklist, Parameter Screenshot - Before, User List, Workday
+termination List, Parameter Screenshot - After. Each collaborator's own page is
+opened for the role they hold in the selected workspace's environment, and
+paginated rosters are followed to the last page. Two optional Workato settings
+(Doppler `ENVIRONMENTS_WORKATO_<FIELD>`, or the YAML) extend it:
+`uar_terminations`, a path to the Workday "SOX Audit - Terminations" export
+(.csv/.xlsx), cross-checked by email so a terminated person still listed is
+flagged; and `uar_pages`, further access pages such as Workato Agentic users, as
+`Label|URL; Label|URL`.
 
 **NetSuite user access review** reads Manage Users, Employees and Roles from the
 configured account and records every user-role pairing with the access columns
