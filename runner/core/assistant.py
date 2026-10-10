@@ -55,6 +55,11 @@ CW_PASSWORD_POLICY_DOC (environment, or a Doppler secret) names the policy:
   - an http(s) URL: password questions carry a link to it. It is not fetched.
     Policy pages sit behind SSO, and a server that fetches whatever URL its
     configuration names is a server that can be pointed at the network.
+  - a Google Drive / Docs link: linked as above, AND read through the Drive API
+    as a service account (core/gdrive.py, GOOGLE_SA_KEY in Doppler), so its
+    text is indexed and answers quote and cite it. Only the file ID is taken
+    from the link and only Google's API is called, so this is not "fetch the
+    URL". Unreadable - no key, not shared - it degrades to the link.
   - a .md or .txt path (absolute, or relative to the docs folder): it is also
     indexed, so its content answers and is cited like the guide's.
 
@@ -161,7 +166,14 @@ def policy():
     if not val:
         return None
     if re.match(r"^https?://\S+$", val, re.I):
-        return {"title": POLICY_TITLE, "kind": "url", "url": val}
+        pol = {"title": POLICY_TITLE, "kind": "url", "url": val}
+        from . import gdrive
+        if gdrive.file_id(val):
+            path = gdrive.cached(val, POLICY_TITLE)
+            if path:
+                # Read from Drive: indexed like a file, still linked like a URL.
+                pol.update(path=path, doc=path.name)
+        return pol
     if "://" in val:
         return None                        # javascript:, file:, ftp: - never linked
     path = Path(val)
@@ -174,6 +186,22 @@ def policy():
     except OSError:
         pass
     return None
+
+
+def _policy_read():
+    """Whether the policy's own text is being answered from, and if not why -
+    for an administrator, through GET /api/ask. Never the key or the path."""
+    pol = policy()
+    if not pol:
+        return None
+    if pol["kind"] == "file":
+        return {"readable": True, "source": "file"}
+    from . import gdrive
+    st = gdrive.status(pol["url"])
+    if st is None:
+        return {"readable": False, "source": "link",
+                "reason": "only Google Drive links are read; other URLs are linked"}
+    return dict(st, source="google-drive")
 
 
 def _reference(pol):
@@ -296,7 +324,7 @@ def _sources_on_disk():
     """(path, is_policy) for everything the index is built from."""
     found = [(p, False) for p in sorted(DOCS.glob("*.md"))] if DOCS.is_dir() else []
     pol = policy()
-    if pol and pol["kind"] == "file":
+    if pol and pol.get("path"):
         target = pol["path"].resolve()
         # A policy that already lives in docs/ is indexed once, flagged as policy.
         found = [(p, p.resolve() == target or flag) for p, flag in found]
@@ -633,7 +661,8 @@ def configured():
                 "sections": len(idx["chunks"]),
                 "intro": _intro(idx["chunks"]),
                 "starters": starters(),
-                "policy": _reference(policy()) if policy() else None},
+                "policy": _reference(policy()) if policy() else None,
+                "policyRead": _policy_read()},
                **_engine(prov))
     if prov and prov["note"]:
         out["note"] = prov["note"]

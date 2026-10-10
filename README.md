@@ -45,6 +45,24 @@ deleted from the OpenAI account after each run. Without the two Doppler settings
 the control stays a simulation. Tests: `cd runner && python3 -m unittest discover
 -s soc1/tests -t .`
 
+**Policy answers in the help assistant.** The assistant reads the CoreWeave
+policy at `CW_PASSWORD_POLICY_DOC` (default: [the policy on Google Drive](https://drive.google.com/file/d/13lHa59DBZgB9F35rPmMDemKs1nRTsTAn/view))
+and answers from its text, citing the clause, with the document linked under the
+answer. The file needs a Google sign-in, so the runner reads it through the
+Google Drive API as a service account - only the file ID is taken from the link,
+and only Google's API is called. One-time setup:
+
+1. In Google Cloud, create a service account, enable the **Google Drive API**,
+   and create a JSON key for it.
+2. Share the policy document with the service account's email, as Viewer.
+3. Put the whole JSON key in Doppler as `GOOGLE_SA_KEY`.
+
+The text is cached under `/data/policy-cache` and re-read hourly
+(`POLICY_REFRESH_SECONDS`), or as soon as Drive reports a newer version; a failed
+refresh keeps the last good copy. Without the key the assistant only links the
+document. `GET /api/ask` reports `policyRead` - whether the text is being read,
+and if not, Google's reason (not shared, API disabled, key rejected).
+
 **NetSuite user access review** reads Manage Users, Employees and Roles from the
 configured account and records every user-role pairing with the access columns
 NetSuite shows. Access in NetSuite is granted per user-ROLE, so one person appears on

@@ -40,10 +40,12 @@ services:
       # selects Doppler as the source of credentials; without it the runner falls
       # back to config/environments.yaml. Read from .env, which is gitignored.
       DOPPLER_TOKEN: "${DOPPLER_TOKEN:-}"
-      # Where the help assistant sends password-policy questions. A URL is linked
-      # (never fetched); a .md/.txt path is indexed and cited. Also readable from
-      # Doppler under the same name. Unset: no reference is shown.
-      CW_PASSWORD_POLICY_DOC: "${CW_PASSWORD_POLICY_DOC:-}"
+      # The policy the help assistant answers from and links to. A Google Drive
+      # link is read through the Drive API as the service account in Doppler's
+      # GOOGLE_SA_KEY (share the file with it), indexed and cited; without that
+      # key it is only linked. Any other URL is linked, never fetched; a .md/.txt
+      # path is indexed. Override in .env; set to empty to show no reference.
+      CW_PASSWORD_POLICY_DOC: "${CW_PASSWORD_POLICY_DOC-https://drive.google.com/file/d/13lHa59DBZgB9F35rPmMDemKs1nRTsTAn/view}"
       CW_PASSWORD_POLICY_TITLE: "${CW_PASSWORD_POLICY_TITLE:-CoreWeave Password Policy}"
       # Where the page sends people to finish SSO. Must be reachable from THEIR
       # browser, so it is the public URL of the site, not a container address.
