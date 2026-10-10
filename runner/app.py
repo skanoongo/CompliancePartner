@@ -1044,7 +1044,9 @@ def job_cancel(job_id):
 SOC1_DIR = DATA_DIR / "soc1-jobs"
 SOC1_MAX_REQUEST = 85 * 1024 * 1024     # three base64 files of up to 20 MiB each
 SOC1_ARTIFACTS = ("SOC1_Draft.xlsx", "Open_Items.json")
+SOC1_PROVIDER = "OpenAI"        # soc1/worker.py talks to the OpenAI Responses API only
 SOC1_PUBLIC = ("id", "status", "message", "artifacts", "open_items", "cleanup_pending",
+               "provider",
                "assessment_id", "system", "vendor", "review_start", "review_end",
                "model", "created_at", "finished_at")
 
@@ -1127,6 +1129,7 @@ def api_soc1_config():
               "OPENAI_SA_KEY is not set in Doppler" if not key else
               "OPENAI_MODEL_NAME is not set in Doppler")
     return jsonify({"available": key and bool(model), "model": model or "",
+                    "provider": SOC1_PROVIDER,
                     "reason": reason, "maxFileBytes": 20 * 1024 * 1024})
 
 
@@ -1173,7 +1176,8 @@ def api_soc1_start():
            "system": system, "vendor": str(context.get("vendor", ""))[:200],
            "review_start": context.get("review_start", ""),
            "review_end": context.get("review_end", ""),
-           "model": model, "created_at": _now(), "finished_at": None}
+           "model": model, "provider": SOC1_PROVIDER,
+           "created_at": _now(), "finished_at": None}
     SOC1_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
     (SOC1_DIR / f"{job_id}.host.json").write_text(json.dumps(rec, indent=2))
     with _soc1_lock:

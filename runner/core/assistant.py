@@ -438,10 +438,16 @@ def _trim(text, limit=900):
 GUIDE_ENGINE = "guide retrieval"
 
 
+PROVIDERS = {"openai": "OpenAI", "claude": "Anthropic"}
+
+
 def _engine(provider=None):
+    """What wrote the words: "ai" and the provider let the page say plainly
+    that an AI model produced an answer, and which one."""
     if not provider:
-        return {"engine": "guide", "model": GUIDE_ENGINE}
-    return {"engine": provider["engine"], "model": provider["model"]}
+        return {"engine": "guide", "model": GUIDE_ENGINE, "ai": False, "provider": ""}
+    return {"engine": provider["engine"], "model": provider["model"], "ai": True,
+            "provider": PROVIDERS.get(provider["engine"], provider["engine"])}
 
 
 def _source(c):

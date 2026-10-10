@@ -692,3 +692,12 @@ aside #systems { display: none !important; }
 .cp-soc1-file .fieldlabel { display: block; margin-bottom: 6px; }
 .cp-soc1-file input[type=file] { display: block; max-width: 100%; font-size: 12px; }
 .cp-soc1-file small { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); }
+
+/* "AI <provider> <model>": the one label used wherever an AI model wrote
+   something - chat replies, the SOC 1 agent's form, progress and draft. */
+.cp-ai-tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 3px;
+  border: 1px solid #d9cdf5; border-radius: 999px; background: #f5f1fe; color: #4b3a8c;
+  font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.cp-ai-tag b { padding: 0 6px; border-radius: 999px; background: #6c55c7; color: #fff;
+  font-size: 10px; letter-spacing: .4px; }
+.cp-chat-ai { margin-bottom: 6px; }
