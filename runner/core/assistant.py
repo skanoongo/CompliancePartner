@@ -101,7 +101,7 @@ STOP = {
     # Interrogatives. They carry no topic, and left in they match headings that
     # merely start with the same word - "what is PBC" retrieved "What is
     # Compliance Partner?" instead of the glossary entry.
-    "what", "how", "why", "when", "where", "which", "whom", "whose",
+    "what", "how", "why", "when", "where", "which", "whom", "whose", "many", "much",
 }
 
 # The guide and its users do not always use the same word. Each entry adds terms
@@ -122,6 +122,16 @@ SYNONYMS = {
     "permission": ["access", "scope", "assigned"],
     "screenshot": ["capture", "evidence"],
     "bot": ["chatbot", "assistant"], "chatbot": ["assistant"],
+    # Policy wording. People ask "how often do I rotate", "can I send it on
+    # Slack"; the policy says "Password Rotation", "Prohibited Transmission
+    # Channels".
+    "rotate": ["rotation"], "rotation": ["rotate"], "change": ["rotation"],
+    "expiry": ["rotation", "expire"], "expire": ["rotation"], "expiration": ["rotation"],
+    "lock": ["lockout"], "locked": ["lockout"],
+    "slack": ["chat", "transmission", "transmit"], "chat": ["transmission"],
+    "email": ["transmission"], "send": ["transmit", "transmission"],
+    "long": ["length", "characters"], "length": ["characters"],
+    "teammate": ["share"], "colleague": ["share"], "coworker": ["share"],
 }
 
 _log = logging.getLogger(__name__)
@@ -209,6 +219,9 @@ def _reference(pol):
     ref = {"title": pol["title"], "kind": pol["kind"]}
     if pol["kind"] == "url":
         ref["url"] = pol["url"]
+        from . import gdrive
+        if gdrive.file_id(pol["url"]):
+            ref["where"] = "Google Doc"            # the page says "refer to the Google Doc"
     else:
         ref["doc"] = pol["doc"]
     return ref
@@ -216,15 +229,35 @@ def _reference(pol):
 
 # ------------------------------------------------------------------ indexing
 
+def _stem(t):
+    """Fold the endings that split one word into several: "share", "sharing" and
+    "shared" all become "shar"; "attempts" becomes "attempt". Deliberately crude -
+    it runs on both sides, so it only has to be consistent, not linguistic - and
+    short words and "-ss" words ("access") are left alone."""
+    if len(t) <= 4 or t.isdigit():
+        return t
+    for end in ("ing", "ed", "es"):
+        if t.endswith(end) and len(t) - len(end) >= 4:
+            return t[: -len(end)]
+    if t.endswith("s") and not t.endswith("ss"):
+        return t[:-1]
+    if t.endswith("e"):
+        return t[:-1]
+    return t
+
+
 def _tokens(text):
-    return [t for t in re.findall(r"[a-z0-9]+", text.lower())
+    return [_stem(t) for t in re.findall(r"[a-z0-9]+", text.lower())
             if len(t) > 1 and t not in STOP]
+
+
+_SYN = {_stem(k): [_stem(v) for v in vs] for k, vs in SYNONYMS.items()}
 
 
 def _expand(terms):
     out = list(terms)
     for t in terms:
-        out.extend(SYNONYMS.get(t, ()))
+        out.extend(_SYN.get(t, ()))
     seen, uniq = set(), []
     for t in out:
         if t not in seen:
@@ -303,6 +336,35 @@ def _table_rows(heading, body):
     return out
 
 
+def _policy_lines(heading, body):
+    """One chunk per line of a policy section, as _table_rows does for markdown
+    tables. A PDF policy's tables arrive as lines ("Lockout Threshold Five (5)
+    failed attempts ..."), and the line that answers a question was buried in a
+    long section that length normalisation pushed down. The section is still
+    indexed whole beside them, so a model composing an answer sees all of it."""
+    lines = []
+    for l in (x.strip(" \u25cf\u25cb\t") for x in body.split("\n")):
+        # A PDF wraps a sentence across lines; a line that starts lowercase
+        # continues the one before it.
+        if lines and l[:1].islower():
+            lines[-1] += " " + l
+        elif l:
+            lines.append(l)
+    out, header = [], ""
+    for l in lines:
+        words = l.split()
+        # A table's column header ("Parameter Human Accounts Service Accounts"):
+        # carried onto the rows beneath it as their question, so "Twenty-four
+        # (24) characters" is known to be about service accounts.
+        if 3 <= len(words) <= 8 and not re.search(r"\d", l) and all(w[:1].isupper() for w in words):
+            header = l
+            continue
+        if 25 <= len(l) <= 300:
+            out.append({"heading": heading, "question": header, "text": l,
+                        "faq": False, "row": True})
+    return out if len(out) >= 2 else []
+
+
 def _wrap(heading, body):
     """Split an over-long section on paragraph boundaries, keeping the heading."""
     if len(body) <= MAX_CHUNK:
@@ -320,9 +382,21 @@ def _wrap(heading, body):
     return out
 
 
+def _is_policy_doc(path):
+    """A document in docs/ that is a policy, by its name ("Password Policy.pdf").
+    Policy answers carry the configured policy link for more information."""
+    return "polic" in path.stem.lower()
+
+
 def _sources_on_disk():
-    """(path, is_policy) for everything the index is built from."""
-    found = [(p, False) for p in sorted(DOCS.glob("*.md"))] if DOCS.is_dir() else []
+    """(path, is_policy) for everything the index is built from.
+
+    docs/ holds the guide (markdown) and may hold policies as PDFs. Both are
+    searched; a policy found there answers first, and the configured policy
+    link is added for more information.
+    """
+    found = ([(p, _is_policy_doc(p)) for p in sorted(DOCS.glob("*.md"))] +
+             [(p, _is_policy_doc(p)) for p in sorted(DOCS.glob("*.pdf"))]) if DOCS.is_dir() else []
     pol = policy()
     if pol and pol.get("path"):
         target = pol["path"].resolve()
@@ -350,17 +424,23 @@ def _build():
     chunks = []
     for path, is_policy in _sources_on_disk():
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            if path.suffix.lower() == ".pdf":
+                from . import gdrive
+                text = gdrive.as_markdown(path.stem, gdrive.pdf_text(path.read_bytes()))
+            else:
+                text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:                  # noqa: BLE001 - one bad file, not no help
             continue
         title, sections = _split_sections(text)
-        if is_policy:
+        if is_policy and path.suffix.lower() != ".pdf":
             title = POLICY_TITLE
         for heading, body in sections:
             if "**Q:" in body:
                 made = _faq_chunks(heading, body)
             else:
                 made = _wrap(heading, body) + _table_rows(heading, body)
+            if is_policy and path.suffix.lower() == ".pdf":
+                made += _policy_lines(heading, body)
             for c in made:
                 c["doc"] = path.name
                 c["title"] = title or path.stem
@@ -433,17 +513,29 @@ def search(question, k=TOP_K):
             scored.append((s, c))
 
     scored.sort(key=lambda t: -t[0])
-    top = scored[:k]
-    if not top:
+    if not scored:
         return [], 0.0
 
+    # Re-rank the leaders by how much of the QUESTION each one accounts for.
+    # BM25 alone let a short section win on one strong term - "password" pulled
+    # in its synonym "credentials", and "2.5 Vendor Default Credentials" beat
+    # "2.2 Password Parameters" for "minimum password length", which it does
+    # not mention. Coverage weighs that back in without discarding the score.
+    content = set(asked)
+
+    def cover(c):
+        # A word counts as covered when it or one of its synonyms is there:
+        # "Slack" is answered by "Prohibited Transmission Channels".
+        have = set(c["terms"]) | c["head_terms"]
+        hit = {t for t in content if t in have or any(v in have for v in _SYN.get(t, ()))}
+        return len(hit) / max(1, len(content))
+
+    pool = [(s * (0.25 + cover(c)), cover(c), c) for s, c in scored[: max(k * 3, 12)]]
+    pool.sort(key=lambda t: -t[0])
+    top = pool[:k]
     # Confidence is how much of the question the best section actually accounts
     # for, not the raw BM25 score - which has no scale a threshold can use.
-    best = top[0][1]
-    content = set(asked)
-    covered = len({t for t in content if t in best["terms"] or t in best["head_terms"]})
-    coverage = covered / max(1, len(content))
-    return [c for _, c in top], coverage
+    return [c for _, _, c in top], top[0][1]
 
 
 # ------------------------------------------------------------ answer shaping
@@ -671,6 +763,8 @@ def configured():
 
 NO_ANSWER_POLICY = ("The Compliance Partner guide does not cover that. For password "
                     "requirements, the {title} is the reference.")
+NO_ANSWER_POLICY_DOC = ("Neither the Compliance Partner guide nor the policy in the docs "
+                        "covers that. For more information, refer to the {where}: {title}.")
 
 
 MAX_TURNS = 8                # earlier turns the page may send
@@ -712,14 +806,16 @@ def ask(question, history=None):
     pol = policy()
     if not pol or result.get("mode") == "empty":
         return result
-    about_passwords = bool(POLICY_TERMS & set(_tokens(question or "")))
+    about_passwords = bool({_stem(t) for t in POLICY_TERMS} & set(_tokens(question or "")))
     cited = any(s.get("policy") for s in result.get("sources", []))
     if not (about_passwords or cited):
         return result
     result["references"] = [_reference(pol)]
     if result.get("mode") == "unknown" and about_passwords:
         # Not a dead end any more: there is somewhere to go for this one.
-        result["answer"] = NO_ANSWER_POLICY.format(title=pol["title"])
+        ref = result["references"][0]
+        result["answer"] = (NO_ANSWER_POLICY_DOC.format(where=ref["where"], title=pol["title"])
+                            if ref.get("where") else NO_ANSWER_POLICY.format(title=pol["title"]))
     return result
 
 

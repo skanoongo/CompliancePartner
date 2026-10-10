@@ -148,3 +148,88 @@ class DriveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def tiny_pdf(lines):
+    """A one-page PDF with these lines of text - enough for pypdf to extract."""
+    esc = lambda s: s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream = "BT /F1 11 Tf 50 780 Td 14 TL " + " ".join(f"({esc(l)}) Tj T*" for l in lines) + " ET"
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream"]
+    out, offs = "%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out))
+        out += f"{i} 0 obj\n{o}\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n" + "".join(f"{o:010d} 00000 n \n" for o in offs)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    return out.encode("latin-1")
+
+
+PDF_LINES = ["Password Policy", "Purpose", "This policy defines minimum requirements for passwords.",
+             "1.2. Personal Password Sharing", "Users must not share passwords assigned to individual accounts.",
+             "1.6. Prohibited Transmission Channels",
+             "Users must not transmit passwords through email, chat or tickets.",
+             "2.2. Password Parameters", "System Owners must configure systems as follows.",
+             "Parameter Human Accounts Service Accounts",
+             "Minimum Length Fifteen (15) characters Twenty-four (24) characters",
+             "Lockout Threshold Five (5) failed attempts Five (5) failed attempts",
+             "Confidential and Proprietary - Internal Use 1"]
+
+
+class DocsPolicyTests(unittest.TestCase):
+    """A policy PDF in docs/ answers first; the Google Doc is the reference."""
+
+    def setUp(self):
+        from core import assistant
+        self.a = assistant
+        self.docs = tempfile.TemporaryDirectory()
+        Path(self.docs.name, "Password Policy.pdf").write_bytes(tiny_pdf(PDF_LINES))
+        Path(self.docs.name, "Guide.md").write_text("# Guide\n\n## Login\n\nSign in with Okta.\n")
+        self.p = [patch.object(assistant, "DOCS", Path(self.docs.name)),
+                  patch.object(assistant, "provider", lambda: None),
+                  patch.dict(os.environ, {"CW_PASSWORD_POLICY_DOC": URL, "GOOGLE_SA_KEY": "",
+                                          "DOPPLER_TOKEN": ""})]
+        for x in self.p:
+            x.start()
+        assistant._index.update(chunks=[], stamp=None)
+
+    def tearDown(self):
+        for x in self.p:
+            x.stop()
+        self.docs.cleanup()
+
+    def ask(self, q):
+        return self.a.ask(q)
+
+    def test_answers_from_the_pdf_with_the_google_doc_reference(self):
+        r = self.ask("What is the minimum password length?")
+        self.assertIn("Fifteen (15) characters", r["answer"])
+        self.assertEqual(r["sources"][0]["doc"], "Password Policy.pdf")
+        self.assertTrue(r["sources"][0]["policy"])
+        self.assertIn("2.2. Password Parameters", r["sources"][0]["heading"])
+        self.assertEqual(r["references"], [{"title": "CoreWeave Password Policy", "kind": "url",
+                                            "url": URL, "where": "Google Doc"}])
+
+    def test_everyday_wording_finds_the_clause(self):
+        self.assertIn("transmit", self.ask("Can I send a password over Slack?")["answer"])
+        self.assertIn("share", self.ask("Can I share my password with a teammate?")["answer"])
+        self.assertIn("failed attempts", self.ask("How many failed attempts before lockout?")["answer"])
+
+    def test_footer_is_not_indexed(self):
+        texts = " ".join(c["text"] for c in self.a.index()["chunks"])
+        self.assertNotIn("Confidential and Proprietary", texts)
+
+    def test_unanswered_password_question_points_to_the_google_doc(self):
+        r = self.ask("Which password manager brand is approved for contractors' mobile phones?")
+        self.assertEqual(r["mode"], "unknown")
+        self.assertIn("refer to the Google Doc", r["answer"])
+
+    def test_guide_questions_get_no_policy_reference(self):
+        r = self.ask("How do I sign in?")
+        self.assertEqual(r["sources"][0]["doc"], "Guide.md")
+        self.assertNotIn("references", r)

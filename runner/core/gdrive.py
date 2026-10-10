@@ -163,16 +163,49 @@ def _docx_text(content):
     return "\n\n".join(lines)
 
 
-def _pdf_text(content):
+FOOTER_RE = re.compile(r"(?m)^\s*(Confidential and Proprietary - Internal Use|Internal Use Only|"
+                       r"Page \d+( of \d+)?)\s*\d*\s*$")
+
+
+def pdf_text(content):
+    """Readable text from a PDF, repaired for how policy PDFs extract.
+
+    Exported Google Docs come out of pypdf with many sentences broken one word
+    per line ("policy\\n \\ndefines\\n \\nminimum"), ligatures as single
+    glyphs ("ﬁ") and a footer on every page. Left like that, retrieval matches
+    fragments and an answer quotes a footer. Layout mode is no better here - it
+    splits words ("p assword"). So: plain extraction, ligatures normalised,
+    the word-per-line runs joined, footers dropped, and numbered clauses
+    ("2.2. Password Parameters") put on their own line so they become headings.
+    """
+    import unicodedata
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
-    return "\n\n".join((page.extract_text() or "").strip() for page in reader.pages)
+    pages = []
+    for page in reader.pages:
+        t = unicodedata.normalize("NFKC", page.extract_text() or "")
+        t = re.sub(r"\s*\n \n\s*", " ", t)
+        t = FOOTER_RE.sub("", t)
+        t = re.sub(r"[ \t]{2,}", " ", t)
+        pages.append(t)
+    text = "\n".join(pages)
+    for footer in ("Confidential and Proprietary - Internal Use",):
+        text = re.sub(re.escape(footer) + r"\s*\d*", " ", text)
+    # "... customer use. 3. Service Account Passwords 3.1. Secure Storage ● ..."
+    clause = r"(\d+(?:\.\d+)*\.)\s+([A-Z][A-Za-z0-9/&,'()\- ]{2,60}?)"
+    text = re.sub(r"(?:(?<=\s)|^)" + clause + r"\s*(?=●|\n|\d+\.\d+\.\s)", r"\n\1 \2\n", text)
+    return re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+
+
+_pdf_text = pdf_text
 
 
 # "4.2 Password length" - a numbered clause, as policies are written. Made a
 # heading so an answer can cite the clause rather than "the policy".
 CLAUSE_RE = re.compile(r"^(\d+(?:\.\d+)*\.?)\s+([A-Z][^.]{2,80})$")
+# "Purpose", "Personnel Responsibilities" - a section title on its own line.
+SECTION_RE = re.compile(r"^[A-Z][a-z]+(?: (?:[A-Z][a-z]+|&|and|of)){0,3}$")
 
 
 def _as_markdown(title, text):
@@ -183,9 +216,15 @@ def _as_markdown(title, text):
             out.append(s)
         elif CLAUSE_RE.match(s) and len(s) <= 90:
             out.append(f"## {s}")
+        elif SECTION_RE.match(s) and len(s) <= 40:
+            out.append(f"## {s}")
         else:
             out.append(line.rstrip())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip() + "\n"
+
+
+def as_markdown(title, text):
+    return _as_markdown(title, text)
 
 
 def _read(fid):

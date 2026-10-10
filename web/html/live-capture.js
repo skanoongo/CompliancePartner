@@ -1285,7 +1285,8 @@
       }
     }
     if (!out.length) return '';
-    return `<div class="cp-chat-ref">For more information: ${out.join(' &middot; ')}</div>`;
+    const where = (turn.references || []).map(r => r.where).find(Boolean);
+    return `<div class="cp-chat-ref">For more information${where ? ', refer to the ' + esc(where) : ''}: ${out.join(' &middot; ')}</div>`;
   }
 
   // Shown on every answer: the sections a reader can check it against, and what
