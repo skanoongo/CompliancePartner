@@ -488,7 +488,11 @@
     controls[app.control].id === SOC1_ID;
 
   function soc1Form(r) {
-    const f = r.soc1Form || (r.soc1Form = { vendor: '', start: '', end: '', use: '' });
+    // The vendor defaults to the system in "Working on": the SOC 1 report being
+    // assessed is that system's. Set once, when this record's form is first
+    // shown - records are per system, so switching system gives that system's
+    // default, and anything typed here is kept.
+    const f = r.soc1Form || (r.soc1Form = { vendor: r.system || app.system || '', start: '', end: '', use: '' });
     const files = soc1Files[key()] || {};
     const fail = r.soc1 && r.soc1.status === 'failed'
       ? `<div class="notice amber" style="margin-top:14px"><strong>The agent did not produce a draft</strong><br>
@@ -505,8 +509,9 @@
         <div class="cp-scopegrid">
           <div>
             <label class="fieldlabel" for="cpSoc1Vendor">Vendor / service</label>
-            <input id="cpSoc1Vendor" class="select" value="${esc(f.vendor)}" placeholder="e.g. Workato iPaaS"
+            <input id="cpSoc1Vendor" class="select" value="${esc(f.vendor)}" placeholder="${esc(app.system || 'Vendor')}"
                    oninput="cpSoc1Set('vendor', this.value)">
+            <small class="cp-soc1-hint">From Working on · edit to name the vendor's service</small>
           </div>
           <div>
             <label class="fieldlabel" for="cpSoc1Use">How the company uses the service <span style="font-weight:400">(optional)</span></label>

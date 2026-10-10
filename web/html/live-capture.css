@@ -701,3 +701,4 @@ aside #systems { display: none !important; }
 .cp-ai-tag b { padding: 0 6px; border-radius: 999px; background: #6c55c7; color: #fff;
   font-size: 10px; letter-spacing: .4px; }
 .cp-chat-ai { margin-bottom: 6px; }
+.cp-soc1-hint { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
