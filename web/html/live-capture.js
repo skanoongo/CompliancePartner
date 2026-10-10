@@ -344,6 +344,7 @@
 
   const protoWorkflow = workflow;
   workflow = function (r) {
+    if (isSoc1()) return soc1Panel(r);
     if (r.live) return livePanel(r);
     // A live control that has not been run yet asks for its scope first.
     if (isLive() && r.stage === 'idle') return scopePanel();
@@ -355,6 +356,7 @@
 
   const protoStartPrepare = startPrepare;
   startPrepare = async function () {
+    if (isSoc1()) return window.cpSoc1Start();
     if (!isLive()) return protoStartPrepare();
 
     const r = rec();
@@ -449,6 +451,242 @@
     startPrepare();
   };
 
+  // ------------------------------------------------------- SOC 1 assessment
+  //
+  // ELC-14 is not a capture: nothing is read from a system. The runner's SOC 1
+  // agent (runner/soc1, from soc1-agent-handoff) takes three uploads - the
+  // AuditBoard all-controls export, the company SOC 1 template and the vendor's
+  // SOC 1 Type II report - and returns a draft in that template plus open items.
+  // The draft then goes through the same human validation and management review
+  // as any workpaper: draft_ready never means approved.
+  //
+  // Offered only when /api/soc1 says the agent is configured (an OpenAI key and
+  // model in Doppler); otherwise the control keeps the prototype's simulation.
+
+  let SOC1 = null;                       // /api/soc1, once it answers
+  const SOC1_ID = 'ELC-14';
+  const SOC1_POLL_MS = 2500;
+  const SOC1_ROLES = [
+    ['controls', 'AuditBoard export of all controls', '.xlsx',
+     'XLSX with Control UID and Description headers'],
+    ['template', 'SOC 1 control-preparation template', '.xlsx', 'XLSX, no macros or external links'],
+    ['report', 'Vendor SOC 1 Type II report for the review period', '.pdf', 'Unlocked PDF']
+  ];
+  const soc1Files = {};                  // record key -> {role: File}; inputs reset on render
+
+  const isSoc1 = () => !!(SOC1 && SOC1.available) && controls[app.control] &&
+    controls[app.control].id === SOC1_ID;
+
+  function soc1Form(r) {
+    const f = r.soc1Form || (r.soc1Form = { vendor: '', start: '', end: '', use: '' });
+    const files = soc1Files[key()] || {};
+    const fail = r.soc1 && r.soc1.status === 'failed'
+      ? `<div class="notice amber" style="margin-top:14px"><strong>The agent did not produce a draft</strong><br>
+           ${esc(r.soc1.message || 'Preparation failed.')}<br>No workpaper was marked prepared.</div>` : '';
+    const rows = SOC1_ROLES.map(([role, label, accept, hint]) => `
+        <div class="cp-soc1-file">
+          <label class="fieldlabel" for="cpSoc1_${role}">${esc(label)}</label>
+          <input id="cpSoc1_${role}" type="file" accept="${accept}" onchange="cpSoc1File('${role}', this)">
+          <small>${files[role] ? 'Selected: ' + esc(files[role].name) + ' · ' + bytes(files[role].size) : esc(hint) + ' · up to 20 MB'}</small>
+        </div>`).join('');
+    return steps(0) + fail + `
+      <div class="cp-scope">
+        <div class="eyebrow">SOC 1 assessment · prepared by the AI agent</div>
+        <div class="cp-scopegrid">
+          <div>
+            <label class="fieldlabel" for="cpSoc1Vendor">Vendor / service</label>
+            <input id="cpSoc1Vendor" class="select" value="${esc(f.vendor)}" placeholder="e.g. Workato iPaaS"
+                   oninput="cpSoc1Set('vendor', this.value)">
+          </div>
+          <div>
+            <label class="fieldlabel" for="cpSoc1Use">How the company uses the service <span style="font-weight:400">(optional)</span></label>
+            <input id="cpSoc1Use" class="select" value="${esc(f.use)}" oninput="cpSoc1Set('use', this.value)">
+          </div>
+          <div>
+            <label class="fieldlabel" for="cpSoc1Start">Company review start</label>
+            <input id="cpSoc1Start" class="select" type="date" value="${esc(f.start)}" onchange="cpSoc1Set('start', this.value)">
+          </div>
+          <div>
+            <label class="fieldlabel" for="cpSoc1End">Company review end</label>
+            <input id="cpSoc1End" class="select" type="date" value="${esc(f.end)}" onchange="cpSoc1Set('end', this.value)">
+          </div>
+        </div>
+        <p class="sub">The company review period is yours to set. It is never taken from the
+        report year, because the report period and the period being reviewed often differ.</p>
+        <div class="cp-soc1-files">${rows}</div>
+        <div class="notice" style="margin-top:14px">The three files are sent to the OpenAI account
+          configured for Compliance Partner${SOC1.model ? ' (model ' + esc(SOC1.model) + ')' : ''},
+          which reads them and drafts the assessment. Upload only evidence approved for that use.
+          Reviewer and sign-off fields are left blank for people to complete.</div>
+        <div class="actions">
+          <button class="btn primary" onclick="cpSoc1Start()">Prepare workpaper</button>
+        </div>
+      </div>`;
+  }
+
+  function soc1Running(r) {
+    const j = r.soc1;
+    return steps(0) + `
+      <div class="cp-live" role="status">
+        <div class="cp-livehead">
+          <span class="spinner"></span>
+          <div>
+            <strong>${j.status === 'queued' ? 'Waiting for the SOC 1 agent' : 'The SOC 1 agent is preparing the draft'}</strong>
+            <small>${esc(j.vendor || '')} · ${esc(j.review_start || '')} to ${esc(j.review_end || '')}
+              ${j.message ? ' · ' + esc(j.message) : ''}</small>
+          </div>
+        </div>
+        <p class="sub">Reading the whole report and mapping complementary user entity controls
+        takes several minutes. You can leave this page; the job keeps running on the server.</p>
+      </div>`;
+  }
+
+  function soc1Result(r) {
+    const j = r.soc1;
+    const items = j.open_items || [];
+    const n = { generated: 1, returned: 1, submitted: 2, approved: 3 }[r.stage] ?? 1;
+    const dl = SOC1_ARTIFACT_NAMES.map(name => `
+        <div class="attachment">
+          <span class="circle">${name.endsWith('.xlsx') ? '▤' : '⋯'}</span>
+          <div style="flex:1"><strong>${esc(name)}</strong>
+            <small>${name.endsWith('.xlsx') ? 'Draft assessment in your template' : 'Open items, JSON'}</small></div>
+          <a class="textbtn" href="/api/soc1/jobs/${esc(j.id)}/artifacts/${encodeURIComponent(name)}">Download</a>
+        </div>`).join('');
+    const list = items.length
+      ? `<div class="cp-tablewrap"><table class="cp-utable">
+           <thead><tr><th>ID</th><th>Open item</th><th>Evidence needed</th></tr></thead>
+           <tbody>${items.map(i => `<tr><td>${esc(i.id)}</td><td>${esc(i.issue)}</td><td>${esc(i.evidence_needed)}</td></tr>`).join('')}</tbody>
+         </table></div>`
+      : `<p class="sub">The agent listed no open items. That is not a reliance conclusion - check
+           coverage, exceptions, CUECs and subservice organizations in the draft.</p>`;
+    return steps(n) + `
+      <div class="cp-users">
+        <div class="eyebrow">SOC 1 draft · ${esc(j.vendor || '')} · ${esc(j.review_start || '')} to ${esc(j.review_end || '')}</div>
+        <div class="notice amber" style="margin-top:10px"><strong>Draft prepared by ${esc(j.model || 'the agent')}. Human review required.</strong><br>
+          Check every mapping, citation, coverage interval, deviation and reliance statement against the
+          report before validating. ${j.cleanup_pending ? 'Some uploaded files could not be deleted from the OpenAI account; an administrator should follow up.' : ''}</div>
+        <div class="cp-tiles"><div class="cp-tile ${items.length ? 'warn' : ''}"><b>${items.length}</b><span>Open items</span></div></div>
+        ${list}
+      </div>
+      <div style="margin-top:14px">${dl}</div>` + reviewBody(r) +
+      `<details class="audit"><summary style="font-size:11px;color:var(--muted);cursor:pointer">Activity history (${r.events.length})</summary>${r.events.map(e => `<div>${esc(e)}</div>`).join('')}</details>`;
+  }
+  const SOC1_ARTIFACT_NAMES = ['SOC1_Draft.xlsx', 'Open_Items.json'];
+
+  function soc1Panel(r) {
+    if (r.soc1 && (r.soc1.status === 'queued' || r.soc1.status === 'running')) return soc1Running(r);
+    if (r.soc1 && r.soc1.status === 'draft_ready') return soc1Result(r);
+    return soc1Form(r);
+  }
+
+  window.cpSoc1Set = function (field, value) { rec().soc1Form[field] = value; };
+
+  window.cpSoc1File = function (role, input) {
+    const k = key();
+    const f = input.files && input.files[0];
+    soc1Files[k] = soc1Files[k] || {};
+    if (!f) { delete soc1Files[k][role]; render(); return; }
+    if (!f.size || f.size > SOC1.maxFileBytes) {
+      delete soc1Files[k][role];
+      toast('Each file must contain data and be at most 20 MB.');
+    } else {
+      soc1Files[k][role] = f;
+    }
+    render();
+  };
+
+  function base64Of(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).split(',', 2)[1] || '');
+      fr.onerror = () => reject(fr.error || new Error('The file could not be read.'));
+      fr.readAsDataURL(file);
+    });
+  }
+
+  let soc1Poller = null;
+  function soc1Poll(recordKey, jobId) {
+    if (soc1Poller) clearInterval(soc1Poller);
+    soc1Poller = setInterval(async () => {
+      const { ok, body } = await api(`/api/soc1/jobs/${jobId}`);
+      const r = app.records[recordKey];
+      if (!r) { clearInterval(soc1Poller); soc1Poller = null; return; }
+      if (!ok || !body) return;
+      r.soc1 = body;
+      if (body.status === 'draft_ready' || body.status === 'failed') {
+        clearInterval(soc1Poller); soc1Poller = null;
+        if (body.status === 'draft_ready') {
+          r.stage = 'generated';
+          log(r, `SOC 1 draft prepared by ${body.model || 'the agent'} - ${(body.open_items || []).length} open item(s); human review required`);
+        } else {
+          r.stage = 'idle';
+          log(r, `SOC 1 agent failed: ${body.message || 'unknown error'}`);
+        }
+      }
+      if (key() === recordKey && app.tab === 'prepare') render();
+    }, SOC1_POLL_MS);
+  }
+
+  window.cpSoc1Start = async function () {
+    const r = rec();
+    const k = key();
+    const f = r.soc1Form || {};
+    const files = soc1Files[k] || {};
+    if (!String(f.vendor || '').trim()) return toast('Enter the vendor / service.');
+    if (!f.start || !f.end || f.end < f.start) return toast('Enter a valid company review start and end.');
+    const missing = SOC1_ROLES.filter(([role]) => !files[role]).map(([, label]) => label);
+    if (missing.length) return toast('Upload: ' + missing.join('; ') + '.');
+    if (r.soc1 && (r.soc1.status === 'queued' || r.soc1.status === 'running')) return;
+
+    r.soc1 = { status: 'queued', message: 'Reading the files in the browser', vendor: f.vendor,
+               review_start: f.start, review_end: f.end };
+    log(r, 'SOC 1 agent requested');
+    render();
+
+    let encoded;
+    try {
+      encoded = {};
+      for (const [role] of SOC1_ROLES) {
+        encoded[role] = { name: files[role].name, base64: await base64Of(files[role]) };
+      }
+    } catch (e) {
+      r.soc1 = { status: 'failed', message: e.message || 'A file could not be read.' };
+      if (key() === k) render();
+      return;
+    }
+
+    r.soc1Key = r.soc1Key || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+    const { ok, status, body } = await api('/api/soc1/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': r.soc1Key },
+      body: JSON.stringify({
+        assessment_id: k, system: app.system,
+        context: { vendor: f.vendor.trim(), review_start: f.start, review_end: f.end,
+                   service_use: String(f.use || '').trim() },
+        files: encoded
+      })
+    }).catch(() => ({ ok: false, status: 0, body: null }));
+    encoded = null;
+
+    if (!ok) {
+      r.soc1 = { status: 'failed', message: (body && body.message) ||
+        (status === 413 ? 'The files are too large.' : `The runner answered ${status || 'nothing'}.`) };
+      r.soc1Key = null;                  // a rejected request was not a preparation
+      log(r, 'SOC 1 agent could not start');
+      if (key() === k) render();
+      return;
+    }
+    r.soc1 = body;
+    r.soc1Key = null;                    // the next Prepare is a new preparation
+    log(r, `SOC 1 agent started (job ${body.id})`);
+    if (key() === k) render();
+    soc1Poll(k, body.id);
+  };
+
+  api('/api/soc1').then(({ ok, body }) => {
+    if (ok && body) { SOC1 = body; render(); }
+  }).catch(() => { /* no runner: SOC 1 stays a prototype */ });
+
   // ------------------------------------------------------- badge on live rows
 
   // Badge every control that is backed by a real capture, not just the selected
@@ -469,10 +707,11 @@
       // Elsewhere the id appears mid-sentence ("Selected Control · UA-04"),
       // which is a label, not a row to badge.
       const control = controls.find(c => text.startsWith(c.id));
-      if (!control || !liveFor(app.system, control.id)) return;
+      const agent = control && control.id === SOC1_ID && SOC1 && SOC1.available;
+      if (!control || !(agent || liveFor(app.system, control.id))) return;
       const b = document.createElement('span');
       b.className = 'cp-badge';
-      b.textContent = 'Live capture';
+      b.textContent = agent ? 'AI agent' : 'Live capture';
       el.appendChild(b);
     });
   }

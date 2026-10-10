@@ -27,6 +27,24 @@ paginated rosters are followed to the last page. Two optional Workato settings
 flagged; and `uar_pages`, further access pages such as Workato Agentic users, as
 `Label|URL; Label|URL`.
 
+**SOC 1 assessment** (any system → Control Preparation → SOC 1 assessment) is
+prepared by an AI agent rather than a capture: nothing is read from the system.
+Enter the vendor/service and the company review period, attach the AuditBoard
+all-controls export (.xlsx), the company SOC 1 template (.xlsx) and the vendor's
+SOC 1 Type II report (.pdf), and **Prepare workpaper**. The runner's
+[soc1 worker](runner/soc1/worker.py) - from the soc1-agent-handoff package -
+sends the three files to OpenAI (Responses API with Code Interpreter) using
+`OPENAI_SA_KEY` and `OPENAI_MODEL_NAME` from Doppler, and returns a draft in the
+uploaded template plus open items. It covers report coverage, results,
+exceptions, CUECs mapped to the controls export, and subservice organizations;
+reviewer and sign-off fields stay blank, and a draft that changes the template's
+tabs, keeps old signatures or has formula errors is withheld. The draft then goes
+through the same validation and management review as any workpaper. Jobs and
+their inputs are kept under `/data/soc1-jobs` in the runner; uploaded files are
+deleted from the OpenAI account after each run. Without the two Doppler settings
+the control stays a simulation. Tests: `cd runner && python3 -m unittest discover
+-s soc1/tests -t .`
+
 **NetSuite user access review** reads Manage Users, Employees and Roles from the
 configured account and records every user-role pairing with the access columns
 NetSuite shows. Access in NetSuite is granted per user-ROLE, so one person appears on
