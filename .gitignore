@@ -40,3 +40,8 @@ python_modules/
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Policy documents dropped into docs/ for the help assistant are company-
+# internal (the password policy is marked "Confidential and Proprietary").
+# The runner reads them from the mounted folder; they never go to GitHub.
+#docs/*.pdf
