@@ -1027,6 +1027,186 @@ def job_cancel(job_id):
     return jsonify(_public(job))
 
 
+# --------------------------------------------------------------------------- #
+# SOC 1 assessment agent                                                       #
+# --------------------------------------------------------------------------- #
+#
+# The routes soc1-agent-handoff's INTEGRATION.md asks the host to mount. The
+# worker (soc1/worker.py) sends three uploads to the OpenAI account configured
+# in Doppler and returns a draft in the uploaded template plus open items. A
+# draft is a draft: the page carries it into the same human validation and
+# management review as every other workpaper.
+#
+# Separate from CAPTURES on purpose. A capture drives the shared browser and
+# runs one at a time with the others; this needs no browser, so it neither
+# waits for a capture nor blocks one.
+
+SOC1_DIR = DATA_DIR / "soc1-jobs"
+SOC1_MAX_REQUEST = 85 * 1024 * 1024     # three base64 files of up to 20 MiB each
+SOC1_ARTIFACTS = ("SOC1_Draft.xlsx", "Open_Items.json")
+SOC1_PUBLIC = ("id", "status", "message", "artifacts", "open_items", "cleanup_pending",
+               "assessment_id", "system", "vendor", "review_start", "review_end",
+               "model", "created_at", "finished_at")
+
+_soc1 = {}                      # job id -> record (the worker updates it in place)
+_soc1_idem = {}                 # (owner, Idempotency-Key) -> job id
+_soc1_lock = threading.Lock()
+# One model run at a time: each one is a long Code Interpreter session over three
+# documents, and spend is bounded by not running them side by side. Others wait
+# as "queued".
+_soc1_slot = threading.Semaphore(1)
+
+
+def _soc1_status_code(exc):
+    return 503 if "Configure" in str(exc) or "Set OPENAI" in str(exc) else 400
+
+
+def _soc1_load(job_id):
+    """A job from memory, or from disk after a restart. None when unknown."""
+    if not re.fullmatch(r"[0-9a-f]{16}", job_id or ""):
+        return None
+    with _soc1_lock:
+        if job_id in _soc1:
+            return _soc1[job_id]
+    host = SOC1_DIR / f"{job_id}.host.json"
+    if not host.is_file():
+        return None
+    try:
+        rec = json.loads(host.read_text())
+        status = SOC1_DIR / job_id / "status.json"
+        if status.is_file():
+            rec.update(json.loads(status.read_text()))
+        elif rec.get("status") in ("queued", "running"):
+            # The process stopped mid-run, so it is not still running somewhere.
+            rec.update(status="failed", message="The runner restarted during this "
+                       "preparation. Prepare again; no draft was produced.")
+    except (ValueError, OSError):
+        return None
+    with _soc1_lock:
+        _soc1.setdefault(job_id, rec)
+        return _soc1[job_id]
+
+
+def _soc1_visible(rec, who):
+    return bool(who) and (who.get("admin") or rec.get("owner") == who.get("id"))
+
+
+def _soc1_public(rec):
+    out = {k: rec[k] for k in SOC1_PUBLIC if k in rec}
+    resp = jsonify(out)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _soc1_run(job_id, payload, rec):
+    from soc1.worker import Soc1Agent
+
+    with _soc1_slot:
+        rec.update(status="running", message="Uploading the three files to the model")
+        try:
+            Soc1Agent(SOC1_DIR).run(job_id, payload, state=rec)
+        except Exception as exc:                   # noqa: BLE001 - surfaced to the page
+            rec.update(status="failed", message=str(exc)[:500])
+        finally:
+            rec["finished_at"] = _now()
+            payload.clear()                        # the evidence is on disk; drop the copy
+            try:
+                (SOC1_DIR / f"{job_id}.host.json").write_text(json.dumps(
+                    {k: v for k, v in rec.items() if k != "open_items"}, indent=2))
+            except OSError:
+                pass
+
+
+@app.get("/api/soc1")
+def api_soc1_config():
+    """Whether the SOC 1 agent can run, and on which model - never the key."""
+    from soc1 import worker
+
+    key, model = bool(worker.api_key()), worker.default_model()
+    reason = ("" if key and model else
+              "OPENAI_SA_KEY is not set in Doppler" if not key else
+              "OPENAI_MODEL_NAME is not set in Doppler")
+    return jsonify({"available": key and bool(model), "model": model or "",
+                    "reason": reason, "maxFileBytes": 20 * 1024 * 1024})
+
+
+@app.post("/api/soc1/jobs")
+def api_soc1_start():
+    from soc1 import worker
+
+    if (request.content_length or 0) > SOC1_MAX_REQUEST:
+        return jsonify({"error": "too_large",
+                        "message": "The three files together are too large (85 MB limit)."}), 413
+    who = current_user()
+    idem = (request.headers.get("Idempotency-Key") or "").strip()[:200]
+    if not idem:
+        return jsonify({"error": "invalid", "message": "Idempotency-Key header is required."}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "invalid", "message": "Send the request as JSON."}), 400
+    system = str(payload.get("system", "")).strip()
+    if not users.may_use(who, system):
+        return jsonify({"error": "not_entitled",
+                        "message": f"You are not assigned to {system or 'this system'}."}), 403
+
+    with _soc1_lock:
+        existing = _soc1_idem.get((who.get("id"), idem))
+    if existing and _soc1_load(existing):
+        # A repeated click is the same preparation, never a second draft.
+        return _soc1_public(_soc1_load(existing)), 202
+
+    model = worker.default_model()
+    if not worker.api_key() or not model:
+        return jsonify({"error": "not_configured",
+                        "message": "The SOC 1 agent is not configured: set OPENAI_SA_KEY "
+                                   "and OPENAI_MODEL_NAME in Doppler."}), 503
+    try:
+        context, _ = worker.validate_request(payload)
+    except Exception as exc:                        # noqa: BLE001 - input problems
+        msg = str(exc) if isinstance(exc, ValueError) else "The upload could not be read."
+        return jsonify({"error": "invalid", "message": msg[:300]}), _soc1_status_code(exc)
+
+    job_id = uuid.uuid4().hex[:16]
+    rec = {"id": job_id, "status": "queued", "message": "Waiting for the agent",
+           "owner": who.get("id"), "owner_name": who.get("name", ""),
+           "assessment_id": str(payload.get("assessment_id", ""))[:200],
+           "system": system, "vendor": str(context.get("vendor", ""))[:200],
+           "review_start": context.get("review_start", ""),
+           "review_end": context.get("review_end", ""),
+           "model": model, "created_at": _now(), "finished_at": None}
+    SOC1_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    (SOC1_DIR / f"{job_id}.host.json").write_text(json.dumps(rec, indent=2))
+    with _soc1_lock:
+        _soc1[job_id] = rec
+        _soc1_idem[(who.get("id"), idem)] = job_id
+    threading.Thread(target=_soc1_run, args=(job_id, payload, rec), daemon=True).start()
+    return _soc1_public(rec), 202
+
+
+@app.get("/api/soc1/jobs/<job_id>")
+def api_soc1_status(job_id):
+    rec = _soc1_load(job_id)
+    if not rec or not _soc1_visible(rec, current_user()):
+        return jsonify({"error": "not_found"}), 404
+    return _soc1_public(rec)
+
+
+@app.get("/api/soc1/jobs/<job_id>/artifacts/<name>")
+def api_soc1_artifact(job_id, name):
+    rec = _soc1_load(job_id)
+    if not rec or not _soc1_visible(rec, current_user()):
+        return jsonify({"error": "not_found"}), 404
+    if name not in SOC1_ARTIFACTS or rec.get("status") != "draft_ready":
+        return jsonify({"error": "not_found"}), 404
+    path = SOC1_DIR / job_id / name
+    if not path.is_file():
+        return jsonify({"error": "not_found"}), 404
+    vendor = re.sub(r"[^A-Za-z0-9._-]+", "_", rec.get("vendor") or "vendor")[:60]
+    resp = send_file(path, as_attachment=True, download_name=f"{vendor}_{name}")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.post("/api/session/reset")
 def session_reset():
     """Forget the stored browser profile, forcing a fresh SSO login next run."""

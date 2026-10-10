@@ -51,6 +51,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY core/ ./core/
 COPY workato/ ./workato/
 COPY netsuite/ ./netsuite/
+# The SOC 1 assessment agent: worker and instructions (its tests stay out, see .dockerignore).
+COPY soc1/ ./soc1/
 COPY app.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
