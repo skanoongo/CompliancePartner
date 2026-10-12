@@ -976,6 +976,18 @@ def try_form_login(page, username, password):
         return False
 
 
+SIGN_IN_ERRORS = ("invalid email or password", "incorrect password", "account is locked",
+                  "account has been locked", "too many attempts", "password has expired")
+
+
+def sign_in_error(page):
+    """The error Workato's sign-in page is showing, if it shows a known one."""
+    for line in page_text(page).splitlines():
+        if any(e in line.lower() for e in SIGN_IN_ERRORS):
+            return line.strip()[:160]
+    return ""
+
+
 def wait_for_login(ctx, page, timeout_s=600, username="", password="", mode="interactive"):
     """Returns the page that is logged in (SSO may finish in a different tab), or None.
 
@@ -995,7 +1007,17 @@ def wait_for_login(ctx, page, timeout_s=600, username="", password="", mode="int
                     log(f"Signed in with the configured credentials. At {page.url}")
                     return page
                 time.sleep(2)
-            log("Form sign-in did not complete - SSO or MFA needs a person.")
+            reason = sign_in_error(page)
+            if reason:
+                # Workato said why. A rejected password is not SSO or MFA, and
+                # saying so sent people to finish a sign-in that could not work.
+                # Not retried: repeated bad attempts can lock the account.
+                log(f"!! Workato rejected the configured credentials for {username}: "
+                    f"\"{reason}\". Update the Workato password in Doppler "
+                    f"(ENVIRONMENTS_WORKATO_PASSWORD) or config/environments.yaml, "
+                    f"or sign in by hand in the browser session.")
+            else:
+                log("Form sign-in did not complete - SSO or MFA needs a person.")
 
     start = time.time()
     last_print = 0
