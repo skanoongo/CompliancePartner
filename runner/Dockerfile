@@ -53,6 +53,8 @@ COPY workato/ ./workato/
 COPY netsuite/ ./netsuite/
 # The SOC 1 assessment agent: worker and instructions (its tests stay out, see .dockerignore).
 COPY soc1/ ./soc1/
+# The audit testing draft agent (it reuses the SOC 1 agent's OpenAI transport).
+COPY audit/ ./audit/
 COPY app.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 

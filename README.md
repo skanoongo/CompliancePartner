@@ -45,6 +45,22 @@ deleted from the OpenAI account after each run. Without the two Doppler settings
 the control stays a simulation. Tests: `cd runner && python3 -m unittest discover
 -s soc1/tests -t .`
 
+**Audit Testing drafts** (Audit Testing → **Generate Draft Workpaper**) use the
+same OpenAI account. The runner's [audit worker](runner/audit/worker.py) sends the
+testing template (uploaded, or the control's standard) and every file in
+*Population, sample selection & supporting evidence*, each tagged with its
+purposes, and the model fills the template from them: test details, population,
+each sample, attribute results with evidence references, exceptions and a draft
+conclusion, plus open items. The run is streamed, and each step, the Python the
+model runs and its output are shown live on the page (or hidden behind a spinner
+with **Run in Background**). Reviewer and sign-off fields stay blank, and a draft
+that changes an XLSX template's tabs or has formula errors is withheld. The file
+is named `<Working on>_<Control number and name>_<YYYY-MM-DD>.<template extension>` and is downloaded from **Prepare Your Workpaper** with **Download
+Generated File**. Jobs and inputs are kept under `/data/audit-jobs`; uploads are
+deleted from the OpenAI account after each run. Without the Doppler settings the
+template is filled locally from the test details only. Tests: `cd runner &&
+python3 -m unittest discover -s audit/tests -t .`
+
 **Policy answers in the help assistant.** The assistant reads the CoreWeave
 policy at `CW_PASSWORD_POLICY_DOC` (default: [the policy on Google Drive](https://drive.google.com/file/d/13lHa59DBZgB9F35rPmMDemKs1nRTsTAn/view))
 and answers from its text, citing the clause, with the document linked under the

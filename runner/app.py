@@ -1264,6 +1264,166 @@ def api_soc1_artifact(job_id, name):
     return resp
 
 
+# --------------------------------------------------------------------------- #
+# Audit testing draft agent                                                    #
+# --------------------------------------------------------------------------- #
+#
+# Audit Testing's "Generate Draft Workpaper": audit/worker.py sends the
+# auditor's testing template and their population, sample selection and
+# supporting evidence to the same OpenAI account as the SOC 1 agent and returns
+# the template filled in, plus open items. Built like the SOC 1 routes above;
+# it shares their one-at-a-time slot, so the two never run side by side.
+
+AUDIT_DIR = DATA_DIR / "audit-jobs"
+AUDIT_MAX_REQUEST = 110 * 1024 * 1024   # 80 MiB of files, base64-encoded, plus context
+AUDIT_PUBLIC = ("id", "status", "message", "log", "artifacts", "draft", "open_items",
+                "cleanup_pending", "provider", "system", "control_number", "model",
+                "created_at", "finished_at")
+
+_audit = {}                     # job id -> record (the worker updates it in place)
+_audit_idem = {}                # (owner, Idempotency-Key) -> job id
+
+
+def _audit_load(job_id):
+    """A job from memory, or from disk after a restart. None when unknown."""
+    if not re.fullmatch(r"[0-9a-f]{16}", job_id or ""):
+        return None
+    with _soc1_lock:
+        if job_id in _audit:
+            return _audit[job_id]
+    host = AUDIT_DIR / f"{job_id}.host.json"
+    if not host.is_file():
+        return None
+    try:
+        rec = json.loads(host.read_text())
+        status = AUDIT_DIR / job_id / "status.json"
+        if status.is_file():
+            rec.update(json.loads(status.read_text()))
+        elif rec.get("status") in ("queued", "running"):
+            rec.update(status="failed", message="The runner restarted during this "
+                       "draft. Generate again; no draft was produced.")
+    except (ValueError, OSError):
+        return None
+    with _soc1_lock:
+        _audit.setdefault(job_id, rec)
+        return _audit[job_id]
+
+
+def _audit_public(rec):
+    resp = jsonify({k: rec[k] for k in AUDIT_PUBLIC if k in rec})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _audit_run(job_id, payload, rec):
+    from audit.worker import AuditAgent
+
+    with _soc1_slot:
+        rec.update(status="running", message="Uploading the template and evidence to the model")
+        try:
+            AuditAgent(AUDIT_DIR).run(job_id, payload, state=rec)
+        except Exception as exc:                   # noqa: BLE001 - surfaced to the page
+            rec.update(status="failed", message=str(exc)[:500])
+        finally:
+            rec["finished_at"] = _now()
+            payload.clear()                        # the evidence is on disk; drop the copy
+            try:
+                (AUDIT_DIR / f"{job_id}.host.json").write_text(json.dumps(
+                    {k: v for k, v in rec.items() if k != "open_items"}, indent=2))
+            except OSError:
+                pass
+
+
+@app.get("/api/audit-draft")
+def api_audit_config():
+    """Whether the audit draft agent can run, and on which model - never the key."""
+    from audit import worker
+
+    key, model = bool(worker.api_key()), worker.default_model()
+    reason = ("" if key and model else
+              "OPENAI_SA_KEY is not set in Doppler" if not key else
+              "OPENAI_MODEL_NAME is not set in Doppler")
+    return jsonify({"available": key and bool(model), "model": model or "",
+                    "provider": SOC1_PROVIDER, "reason": reason,
+                    "maxFileBytes": worker.MAX_FILE, "maxTotalBytes": worker.MAX_TOTAL,
+                    "maxFiles": worker.MAX_FILES})
+
+
+@app.post("/api/audit-draft/jobs")
+def api_audit_start():
+    from audit import worker
+
+    if (request.content_length or 0) > AUDIT_MAX_REQUEST:
+        return jsonify({"error": "too_large",
+                        "message": "The template and evidence together are too large (80 MB limit)."}), 413
+    who = current_user()
+    idem = (request.headers.get("Idempotency-Key") or "").strip()[:200]
+    if not idem:
+        return jsonify({"error": "invalid", "message": "Idempotency-Key header is required."}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "invalid", "message": "Send the request as JSON."}), 400
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    system = str(context.get("system", "")).strip()
+    if not users.may_use(who, system):
+        return jsonify({"error": "not_entitled",
+                        "message": f"You are not assigned to {system or 'this system'}."}), 403
+
+    with _soc1_lock:
+        existing = _audit_idem.get((who.get("id"), idem))
+    if existing and _audit_load(existing):
+        # A repeated click is the same draft, never a second one.
+        return _audit_public(_audit_load(existing)), 202
+
+    model = worker.default_model()
+    if not worker.api_key() or not model:
+        return jsonify({"error": "not_configured",
+                        "message": "The audit draft agent is not configured: set OPENAI_SA_KEY "
+                                   "and OPENAI_MODEL_NAME in Doppler."}), 503
+    try:
+        context, _, _ = worker.validate_request(payload)
+    except Exception as exc:                        # noqa: BLE001 - input problems
+        msg = str(exc) if isinstance(exc, ValueError) else "The upload could not be read."
+        return jsonify({"error": "invalid", "message": msg[:300]}), 400
+
+    job_id = uuid.uuid4().hex[:16]
+    rec = {"id": job_id, "status": "queued", "message": "Waiting for the agent",
+           "owner": who.get("id"), "owner_name": who.get("name", ""),
+           "system": system, "control_number": context.get("control_number", ""),
+           "model": model, "provider": SOC1_PROVIDER,
+           "created_at": _now(), "finished_at": None}
+    AUDIT_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    (AUDIT_DIR / f"{job_id}.host.json").write_text(json.dumps(rec, indent=2))
+    with _soc1_lock:
+        _audit[job_id] = rec
+        _audit_idem[(who.get("id"), idem)] = job_id
+    threading.Thread(target=_audit_run, args=(job_id, payload, rec), daemon=True).start()
+    return _audit_public(rec), 202
+
+
+@app.get("/api/audit-draft/jobs/<job_id>")
+def api_audit_status(job_id):
+    rec = _audit_load(job_id)
+    if not rec or not _soc1_visible(rec, current_user()):
+        return jsonify({"error": "not_found"}), 404
+    return _audit_public(rec)
+
+
+@app.get("/api/audit-draft/jobs/<job_id>/artifacts/<name>")
+def api_audit_artifact(job_id, name):
+    rec = _audit_load(job_id)
+    if not rec or not _soc1_visible(rec, current_user()):
+        return jsonify({"error": "not_found"}), 404
+    if name not in (rec.get("artifacts") or ()) or rec.get("status") != "draft_ready":
+        return jsonify({"error": "not_found"}), 404
+    path = AUDIT_DIR / job_id / name
+    if not path.is_file():
+        return jsonify({"error": "not_found"}), 404
+    resp = send_file(path, as_attachment=True, download_name=name)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.post("/api/session/reset")
 def session_reset():
     """Forget the stored browser profile, forcing a fresh SSO login next run."""

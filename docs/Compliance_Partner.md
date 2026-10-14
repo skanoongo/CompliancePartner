@@ -206,12 +206,13 @@ Example Workato ITGCs: C-UA-05 Generic/Shared Accounts Access Review · C-UA-04 
    - Testing period: **Over a period** (start and end date) or **Point in time**
    - Assessment: **Design Assessment**, **Operating Effectiveness Testing** or **Both**
    - Testing template: click **Upload a Testing Template** and choose an editable XLSX, DOCX, HTML or TXT file. If you don't upload one, the control's standard template is used. Tick **Make this the standard template going forward** to keep the uploaded template for future tests of that control in this browser.
-3. **Upload population, selected samples and supporting (PBC) evidence.** You can select several files at once. File purposes are suggested from filenames, so review or correct them. One combined file can serve several purposes. Files stay on your device.
+3. **Upload population, selected samples and supporting (PBC) evidence.** You can select several files at once. File purposes are suggested from filenames, so review or correct them. One combined file can serve several purposes. Each file can be up to 20 MB, and up to 80 MB in total.
 4. **Acknowledge preparer responsibility** (the same statement as in Control Preparation).
-5. Click **Generate Draft Workpaper**.
-6. **Review attributes and supporting evidence.** Save corrections, then **regenerate** before downloading. Download is blocked until corrections are regenerated.
-7. **Download Current Workpaper**, or **Upload Revised Workpaper** (an externally revised version becomes the current version; it does not change the standard template). Previous versions are listed.
-8. Complete review and sign-off in your audit system.
+5. Click **Generate Draft Workpaper**. The AI agent reads every uploaded file according to its purpose and fills the testing template: test details, population, each selected sample, attribute results with evidence references, exceptions and a draft conclusion. Reviewer and sign-off fields are left blank. This takes a few minutes; keep the page open. **Prepare Your Workpaper** shows what the agent is doing as it happens (debug view): each step, the Python it runs on your files and that code's output, and its notes. Click **Run in Background** to hide the details; a spinner shows the agent is still working, and **Show Details** brings the log back. When the run finishes the spinner stops, the log folds into **Agent log**, and the download appears. The template and files are sent to the company's OpenAI account for this and deleted from it afterwards. If the AI agent isn't configured, the template is filled from the test details only.
+6. **Download the generated file** from **Prepare Your Workpaper** with **Download Generated File**. It is named `<Working on>_<Control number and name>_<date>.<template extension>`, for example `Workato_C-UA-04_Periodic_User_Access_Review_2026-10-14.xlsx`. The AI agent's open items (unsupported attributes, missing evidence) are listed below it.
+7. **Review attributes and supporting evidence.** Save corrections, then **regenerate** before downloading. Download is blocked until corrections are regenerated.
+8. **Download Current Workpaper**, or **Upload Revised Workpaper** (an externally revised version becomes the current version; it does not change the standard template). Previous versions are listed.
+9. Complete review and sign-off in your audit system.
 
 **Standard template fields:** Control number and name, System, Testing period, Assessment, Sample selection, Evidence (PBC support), Auditor conclusion.
 
