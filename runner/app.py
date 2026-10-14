@@ -845,7 +845,8 @@ def _projects():
     fn = getattr(sox_capture, "project_names", None)
     if callable(fn):
         try:
-            return list(fn())
+            # The built-in list depends on the workspace (CW Agentic or Production).
+            return list(fn(_workspaces("workato")[1]))
         except Exception:
             return []
     # Fall back to the built-in sections the script still ships as its default.
