@@ -205,7 +205,7 @@ Example Workato ITGCs: C-UA-05 Generic/Shared Accounts Access Review · C-UA-04 
 2. **Define the test**
    - Testing period: **Over a period** (start and end date) or **Point in time**
    - Assessment: **Design Assessment**, **Operating Effectiveness Testing** or **Both**
-   - Testing template: **Use standard template** (the built-in SOX example) or **Upload a new testing template**. Use **Preview Standard Template** to view or edit it. Saved changes apply to future tests of that control in this browser.
+   - Testing template: click **Upload a Testing Template** and choose an editable XLSX, DOCX, HTML or TXT file. If you don't upload one, the control's standard template is used. Tick **Make this the standard template going forward** to keep the uploaded template for future tests of that control in this browser.
 3. **Upload population, selected samples and supporting (PBC) evidence.** You can select several files at once. File purposes are suggested from filenames, so review or correct them. One combined file can serve several purposes. Files stay on your device.
 4. **Acknowledge preparer responsibility** (the same statement as in Control Preparation).
 5. Click **Generate Draft Workpaper**.
@@ -314,7 +314,7 @@ A: Click **Investigate →**, review expected and observed values, set the dispo
 A: Click **Reports & Export**, choose Issues or Run History, set the filters, click **Generate Report**, then **Export CSV**.
 
 **Q: Can I use my own audit testing template?**
-A: Yes. Choose **Upload a new testing template**, or edit and save the standard template via **Preview Standard Template**.
+A: Yes. Click **Upload a Testing Template** in the Testing workspace, and optionally make it the standard for the control.
 
 **Q: Will I lose my work if I refresh?**
 A: In the current prototype, yes. Files, activity, run history and dispositions are cleared. Download your workpaper and export history first.
