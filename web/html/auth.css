@@ -57,6 +57,9 @@ body.authpage {
   font-size: 19px;
 }
 
+/* The logo image carries the name, so it replaces the badge and text. */
+.brandlogo { display: block; height: 34px; width: auto; }
+
 .brandrow {
   display: flex;
   align-items: center;
