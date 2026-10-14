@@ -102,6 +102,38 @@ later runs start straight away.
 A full run takes roughly 20-40 minutes and produces ~30 screenshots; a single
 project is proportionally quicker.
 
+## Termination reconciliation dashboard
+
+Under **Compliance Monitoring**, select **Employee & Contractor Termination**.
+This control compares **Workday + Okta** regardless of the previously selected
+system; the header identifies that comparison. Other controls retain the selected
+system. The chart shows classifications from an
+imported Workato reconciliation CSV. Click a non-green segment or its label to
+open the matching workers below; search by name or employee ID. The dashboard
+includes four summary cards, an outcome donut, employee/contractor stacked bars,
+an OK-record timing distribution, and a selectable timeline comparing Workday
+entry lag with Okta processing. Timing bars open their matching records; **Export
+review** downloads all records, or the filtered records while details are open.
+A nonempty CSV
+containing only `OK` results shows an all-green state with no follow-up records.
+Missing snapshots, empty CSVs, malformed input, and unknown classifications never
+produce an all-clear result.
+
+An administrator can select **Import CSV** to update the snapshot. Readers need
+the Compliance Monitoring module and access to both Workday and Okta. The snapshot
+is stored in the runner's persistent data volume, outside the repository and
+container image. **Reload snapshot** reads this saved data; updating the underlying
+systems requires running the Workato recipe and importing its new CSV.
+
+Required columns: `Full name`, `Employee ID`, `Worker Type`, `Termination Date`,
+`Term Entered On`, `Okta Disable Date`, `Status`, and `Result`. Dates use
+`YYYY-MM-DD`. Optional timing columns are preserved. `OK`, `MISSED`, `REHIRED`,
+and `LATE` retain their recipe meaning; other statuses appear in a review category.
+Entry-adjusted cases remain inside `OK`. Missing Okta log evidence does not prove
+that an account is currently active.
+
+The dashboard is directly reachable at `/?system=Okta&tab=monitor` after sign-in.
+
 ## Making changes and CI
 
 `main` is the integration branch. Use the `CI` branch for changes and open a pull

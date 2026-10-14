@@ -31,7 +31,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
 
-from core import assistant, auth, environments, systems, users
+from core import assistant, auth, environments, systems, terminations, users
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("CAPTURE_DATA_DIR", "/data"))
@@ -439,6 +439,58 @@ def api_ask_status():
         return jsonify({"available": False, "docs": [], "sections": 0, "model": None})
 
 
+def _require_termination_access():
+    who = current_user()
+    if not who:
+        return None, (jsonify({"error": "not_signed_in"}), 401)
+    if not who.get("admin") and (
+        "monitor" not in who.get("modules", []) or
+        not all(users.may_use(who, system) for system in ("Workday", "Okta"))
+    ):
+        return None, (jsonify({"error": "not_entitled", "message":
+                              "Monitoring access to both Workday and Okta is required."}), 403)
+    return who, None
+
+
+@app.get("/api/termination-reconciliation")
+def termination_reconciliation():
+    who, err = _require_termination_access()
+    if err:
+        return err
+    try:
+        report = terminations.load()
+    except terminations.SnapshotError as exc:
+        return jsonify({"error": "invalid_snapshot", "message": str(exc)}), 422
+    if report is None:
+        return jsonify({"available": False, "canImport": bool(who.get("admin"))})
+    response = jsonify({**report, "available": True, "canImport": bool(who.get("admin"))})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/api/termination-reconciliation")
+def termination_reconciliation_import():
+    who, err = _require_admin()
+    if err:
+        return err
+    if request.content_length and request.content_length > terminations.MAX_BYTES + 65536:
+        return jsonify({"error": "too_large", "message": "The CSV must be no larger than 2 MB."}), 413
+    upload = request.files.get("file")
+    if not upload or not upload.filename.lower().endswith(".csv"):
+        return jsonify({"error": "invalid", "message": "Choose a Workato reconciliation CSV file."}), 400
+    try:
+        report = terminations.save(upload.read(terminations.MAX_BYTES + 1), upload.filename,
+                                   request.form.get("source_url", "").strip())
+    except terminations.SnapshotError as exc:
+        return jsonify({"error": "invalid", "message": str(exc)}), 400
+    except OSError:
+        app.logger.exception("Could not save termination reconciliation snapshot")
+        return jsonify({"error": "save_failed", "message": "The CSV could not be saved. Try again."}), 500
+    response = jsonify({**report, "available": True, "canImport": True})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/api/sox-systems")
 def api_sox_systems():
     """The inventory: every system a person can be assigned to."""
@@ -644,6 +696,7 @@ def auth_logout():
     cfg = _cfg()
     target = auth.logout_url(cfg) if cfg.get("enabled") else None
     resp = make_response(redirect(target or "/login"))
+    resp.set_cookie(LOCAL_COOKIE, "", max_age=0, path="/")
     resp.set_cookie(auth.SESSION_COOKIE, "", max_age=0, path="/")
     return resp
 

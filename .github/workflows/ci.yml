@@ -18,7 +18,7 @@ jobs:
   code-checks:
     name: Code checks
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,6 +34,12 @@ jobs:
         run: bash -n runner/entrypoint.sh
       - name: Validate Compose configuration
         run: docker compose config --quiet
+      - name: Install runner test dependencies
+        run: python -m pip install -r runner/requirements.txt
+      - name: Test runner APIs and CSV handling
+        run: |
+          python -m unittest discover -s runner/tests -t runner
+          python -m unittest discover -s runner/soc1/tests -t runner
 
   docker-smoke:
     name: Docker build and smoke checks
