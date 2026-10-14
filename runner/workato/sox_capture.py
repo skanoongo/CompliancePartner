@@ -28,6 +28,14 @@ Config sheet columns (one row per recipe):
 Only rows with Capture=Y are screenshotted. Recipes found in a folder but absent from the
 sheet are reported as warnings (never captured silently).
 
+CW Agentic: with --workspace "CW Agentic" (or "Development", its environment, which the
+service account signs in to) and no sheet/CSV, --use-builtin takes the CW Agentic recipe
+list below, and the folder and workbook are named "... - <Month> - CW Agentic". Folders
+are scanned across pagination and subfolders before a configured recipe is reported
+missing, and the workspace check waits (up to 10 minutes) instead of asking for Enter,
+so a run started from the page never blocks on a prompt. Folded in from the
+workato_sox_capture_agentic.py launcher.
+
 Setup (once)
 ------------
   pip3 install playwright openpyxl pillow
@@ -162,6 +170,95 @@ SECTIONS = [
         "folders": [],
     },
 ]
+
+# --------------------------------------------------------------------------- #
+# Built-in recipe list for CW Agentic > Development (no Google Sheet needed).  #
+# Same columns as the config sheet. From workato_sox_capture_agentic.py, the   #
+# CW Agentic launcher this capture now folds in. A --config-sheet or           #
+# --config-csv always wins over it.                                            #
+# --------------------------------------------------------------------------- #
+AGENTIC_CONFIG_CSV = """Tab,Folder,Folder ID,Recipe ID,Recipe Name,Group,Capture,Notes
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,,,,Y,Project assets page
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,72943334,Scheduling Automation,CJL Scheduling Automation,N,Not in random 20-shot sample
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,71342745,TRIGGER | Gong Call Completed,Gong,N,Not in random 20-shot sample
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,71414498,FUNC | Search for records using SOQL query,RevOps Genie,Y,
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68482495,TRIGGER | Notify Users/Assignee on Jira Issue Status Changes,Jira,N,Not in random 20-shot sample
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68427680,Create Jira Ticket (Procurement),Jira,N,Not in random 20-shot sample
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68409974,REC | Data Source - Scheduler [Jira],Jira,Y,
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68214806,TRIGGER | Bot Intervention for Freshservice Tickets,Freshservice,N,Not in random 20-shot sample
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68214807,TRIGGER | Notify Users on FreshService Ticket Status Changes,Freshservice,N,Not in random 20-shot sample
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,69382829,Get nurture email suggestions and associated MQL contacts,Marketing MEL Genie,Y,
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,69336928,[DEV]Summary section for report,Marketing MEL Genie,N,DEV-tagged
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68662667,Aggregated Stats[DRAFT- DO NOT USE],,N,Draft
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,67870197,test,,N,Test recipe
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68482496,Comment,,N,App-event stub
+1. Agentic - All Genies,0. Agentic | All Genies,27857281,68482494,Issue,,N,App-event stub
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,,,,Y,Project assets page
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,70362260,Main: Lease Agent Abstraction,Lease Abstraction,N,Not in random 20-shot sample
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994620,REC | Send Notification to User [App Event][Template],Templates,Y,
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994619,REC | [Slack] Scheduler to Trigger Feedback,Slack User Feedback,N,Not in random 20-shot sample
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994617,REC | [Microsoft Teams] Scheduler to Trigger Feedback,Microsoft Teams User Feedback,Y,
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994615,REC | [Slack] Subscribe to error notifications,Error Notifications,N,Not in random 20-shot sample
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994614,REC | [Microsoft Teams] Subscribe to error notifications,Error Notifications,N,Not in random 20-shot sample
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994612,Monitor Data Source Ingestion Errors,Error Notifications,Y,
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,70577926,Job,,N,App-event stub
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,70435195,Spreadsheet Row,,N,App-event stub
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994618,Command,,N,App-event stub
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994616,Action,,N,App-event stub
+2. Agentic - Common Utilities,1. Agentic | Common Utilities,27857282,67994613,Job,,N,App-event stub
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,,,,Y,Project assets page
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,83023756,Generic error handler,,N,Not in random 20-shot sample
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,83023755,Cleanup idempotency keys,,N,Not in random 20-shot sample
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,83023190,Search tool validations,,Y,
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,83023189,Get server configuration value,,N,Not in random 20-shot sample
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,83023188,Cleanup Idempotency keys,,Y,
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,82646390,fuzzy_match,,N,Not in random 20-shot sample
+3. Procurement Assistant Genie,Procurement Assistant Genie,32209201,82483979,log_audit_entry,,Y,
+4. Legal,Legal,30604443,,,,Y,Project assets page
+4. Legal,Legal,30604443,82281744,Ironclad – Auto-Reassign Workflow Owner on Launch,,N,Not in random 20-shot sample
+4. Legal,Legal,30604443,72614262,ORCH_DailyChecker,Lease Agent,N,Not in random 20-shot sample
+4. Legal,Legal,30604443,72574893,FN_LineItemTransformation,Lease Agent,Y,
+4. Legal,Legal,30604443,72630223,FN_InvoiceLineItems,Lease Agent,N,Not in random 20-shot sample
+4. Legal,Legal,30604443,72544358,FN_GetInvoiceSchedule,Lease Agent,Y,
+4. Legal,Legal,30604443,72544759,FN_SendSlackAlerts,Lease Agent,Y,
+4. Legal,Legal,30604443,72575525,FN_UploadToGDrive,Lease Agent,N,Not in random 20-shot sample
+4. Legal,Legal,30604443,72539246,FN_LogError,Lease Agent,N,Not in random 20-shot sample
+4. Legal,Legal,30604443,82824409,[TEST] ORCH_DailyChecker,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82824163,[TEST] FN_LineItemTransformation,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82824171,[TEST] FN_InvoiceLineItems,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82824211,[TEST] FN_SendSlackAlerts,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82824293,[TEST] FN_GetInvoiceSchedule,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82824128,[TEST] FN_UploadToGDrive,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82824120,[TEST] FN_LogError,[TEST] Lease Invoice Agent,N,Test copy
+4. Legal,Legal,30604443,82821751,Email,,N,App-event stub
+4. Legal,Legal,30604443,72563127,Email,,N,App-event stub
+"""
+
+# Workspace (as the header shows it, lowercased) -> label and built-in list. The
+# label keeps a run's folder and workbook apart from the classic CoreWeave >
+# Production review: "Workato CM Review - <Month> - CW Agentic.xlsx". The
+# service account signs in to CW Agentic, whose environment is "Development".
+WORKSPACE_LISTS = {
+    "cw agentic": ("CW Agentic", AGENTIC_CONFIG_CSV),
+    "development": ("CW Agentic", AGENTIC_CONFIG_CSV),
+}
+
+
+def workspace_label(workspace):
+    """'CW Agentic' for the Agentic workspace; '' for CoreWeave > Production."""
+    return WORKSPACE_LISTS.get((workspace or "").strip().lower(), ("", None))[0]
+
+
+def builtin_sections(workspace):
+    """The built-in recipe list for this workspace: CW Agentic's, else Production's SECTIONS."""
+    csv_text = WORKSPACE_LISTS.get((workspace or "").strip().lower(), ("", None))[1]
+    return parse_config_csv(csv_text) if csv_text else SECTIONS
+
+
+def project_names(workspace=""):
+    """Workbook tabs of the built-in list, for the page's project picker."""
+    return [s["tab"] for s in builtin_sections(workspace or os.environ.get("CAPTURE_WORKSPACE", ""))]
+
 
 RECIPE_RE = re.compile(r"/recipes/(\d+)")
 FID_RE = re.compile(r"[?&]fid=(\d+)")
@@ -353,8 +450,10 @@ def load_config(args, page):
         CONFIG_FILE.write_text(json.dumps({"config_sheet": url}, indent=2))  # remember even if load fails
         return load_config_from_sheet(page, url)
     if args.use_builtin:
-        log("!! Using the BUILT-IN recipe list (--use-builtin). This list may be out of date.")
-        return SECTIONS
+        label = workspace_label(args.workspace)
+        log(f"!! Using the BUILT-IN {label or 'CoreWeave > Production'} recipe list (--use-builtin). "
+            "Pass --config-sheet/--config-csv to override; this list may be out of date.")
+        return builtin_sections(args.workspace)
     sys.exit(
         "No recipe list configured.\n"
         "  --config-sheet <Google Sheet URL>   remembered for later runs; needs a Google\n"
@@ -452,13 +551,23 @@ def browser_window_id(pid):
     jxa = f"""
 ObjC.import('CoreGraphics');
 var list = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
-var arr = ObjC.deepUnwrap(list) || [];
-var wins = arr.filter(function(w){{ return w.kCGWindowOwnerPID == {pid} && w.kCGWindowLayer == 0 && w.kCGWindowBounds && w.kCGWindowBounds.Width > 300; }});
-wins.sort(function(a,b){{ return (b.kCGWindowBounds.Width*b.kCGWindowBounds.Height) - (a.kCGWindowBounds.Width*a.kCGWindowBounds.Height); }});
+// ObjC.deepUnwrap can return a non-Array; then walk the CoreGraphics array by hand.
+var raw = ObjC.deepUnwrap(list);
+var arr = [];
+if (Array.isArray(raw)) arr = raw;
+else {{ var n = $.CFArrayGetCount(list); for (var i = 0; i < n; i++) arr.push(ObjC.deepUnwrap($.CFArrayGetValueAtIndex(list, i))); }}
+var wins = [];
+for (var i = 0; i < arr.length; i++) {{
+  var w = arr[i] || {{}};
+  var b = w.kCGWindowBounds || {{}};
+  if (w.kCGWindowOwnerPID == {pid} && w.kCGWindowLayer == 0 && b.Width > 300) wins.push(w);
+}}
+wins.sort(function(a, b) {{ return (b.kCGWindowBounds.Width * b.kCGWindowBounds.Height) - (a.kCGWindowBounds.Width * a.kCGWindowBounds.Height); }});
 wins.length ? String(wins[0].kCGWindowNumber) : '';
 """
     try:
-        out = subprocess.check_output(["osascript", "-l", "JavaScript", "-e", jxa], text=True, timeout=10).strip()
+        out = subprocess.check_output(["osascript", "-l", "JavaScript", "-e", jxa], text=True,
+                                      stderr=subprocess.DEVNULL, timeout=10).strip()
         return int(out) if out else None
     except Exception:
         return None
@@ -638,6 +747,31 @@ def mac_screencapture(path, display=1, window_id=None, screen_w=None):
 # --------------------------------------------------------------------------- #
 # browser side                                                                 #
 # --------------------------------------------------------------------------- #
+
+# Agentic projects nest recipes in subfolders, and assets pages paginate, so a
+# configured recipe is only reported missing after both have been scanned.
+NEXT_PAGE_JS = """
+() => {
+  const isOff = el => el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+                      /disabled/i.test(el.className || '') || el.closest('[aria-disabled="true"], .disabled, [disabled]');
+  const cands = Array.from(document.querySelectorAll('button, a, [role=button]'));
+  const txt = el => ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') +
+                     ' ' + (el.getAttribute('title') || '')).trim();
+  let next = cands.find(el => /^(next( page)?|›|»|>|→)$/i.test(txt(el)) || /next/i.test(el.getAttribute('aria-label') || '')
+                              || el.getAttribute('rel') === 'next');
+  if (!next) {
+    const cur = cands.find(el => el.getAttribute('aria-current') === 'page' || /\\b(active|current|selected)\\b/i.test(el.className || ''));
+    const n = cur ? parseInt(txt(cur), 10) : NaN;
+    if (!isNaN(n)) next = cands.find(el => txt(el) === String(n + 1));
+  }
+  if (!next) return {found: false};
+  if (isOff(next)) return {found: true, enabled: false};
+  next.setAttribute('data-sox-next', '1');
+  return {found: true, enabled: true};
+}
+"""
+
+
 class Capturer:
     def __init__(self, page, out_dir, settle, month, app_name, display, max_parts, workspace,
                  capture_mode="window", screen_w=None, max_height=8000):
@@ -823,10 +957,60 @@ class Capturer:
             best = m.group(1)  # last breadcrumb-ish link as fallback
         return best
 
+    def discover_subfolders(self, fid):
+        links = self.page.evaluate(
+            """() => Array.from(document.querySelectorAll('a[href*="fid="]'))
+                     .map(a => ({href: a.getAttribute('href') || '', text: (a.innerText || '').trim().split('\\n')[0]}))"""
+        )
+        out = {}
+        for l in links:
+            m = FID_RE.search(l["href"])
+            if not m or m.group(1) == str(fid) or not l["text"] or l["text"].lower() in ("description", "projects"):
+                continue
+            out.setdefault(m.group(1), l["text"])
+        return out
+
+    def discover_recipes_paged(self, max_pages=10):
+        found = dict(self.discover_recipes())
+        for _ in range(max_pages - 1):
+            nxt = self.page.evaluate(NEXT_PAGE_JS) or {}
+            if not nxt.get("found") or not nxt.get("enabled"):
+                break
+            try:
+                self.page.click("[data-sox-next]", timeout=8000)
+                time.sleep(max(2.0, self.settle))
+            except Exception:
+                break
+            more = self.discover_recipes()
+            if not any(r not in found for r in more):
+                break
+            found.update(more)
+        return found
+
+    def discover_recipes_deep(self, fid, max_depth=3, max_folders=60):
+        """Recipes in the folder and all its subfolders (breadth-first). Leaves the page on a
+        subfolder; the caller re-opens the folder before the screenshot."""
+        found = dict(self.discover_recipes_paged())
+        queue = [(sf, 1) for sf in self.discover_subfolders(fid)]
+        seen, visited = {str(fid)}, 0
+        while queue and visited < max_folders:
+            sub, depth = queue.pop(0)
+            if sub in seen:
+                continue
+            seen.add(sub)
+            visited += 1
+            self.goto(assets_url(sub))
+            for rid, nm in self.discover_recipes_paged().items():
+                found.setdefault(rid, nm)
+            if depth < max_depth:
+                queue += [(s, depth + 1) for s in self.discover_subfolders(sub) if s not in seen]
+        if visited:
+            log(f"  scanned {visited} subfolder(s): {len(found)} recipes in total")
+        return found
+
     def run_folder(self, tab, folder):
         name, fid, known, expected = folder["name"], folder["fid"], folder["known"], folder["expected"]
         log(f"Folder: {name}")
-
         skip = folder.get("skip", {})
         by_name = folder.get("by_name", [])
         groups = folder.get("groups", {})
@@ -845,20 +1029,19 @@ class Capturer:
         ok = self.goto(assets_url(fid), must_contain=f"fid={fid}")
         if not ok:
             self.warn(f"could not stay on folder {fid} ({name}); assets screenshot may be wrong")
-        discovered = self.discover_recipes()
+        first_page = self.discover_recipes()
 
         if folder.get("assets_only"):
-            log(f"  assets-only folder; page shows {len(discovered)} recipe link(s)"
-                + (": " + ", ".join(f"{r} '{n}'" for r, n in discovered.items()) if discovered else ""))
+            log(f"  assets-only folder; page shows {len(first_page)} recipe link(s)")
             self.shoot(tab, "assets", fid, f"{name} - Assets (filter: Recipes)", assets_url(fid))
             return
-        if len(discovered) < expected:
-            log(f"  ! expected {expected} recipes, page shows {len(discovered)} - reloading once")
-            self.page.reload(wait_until="domcontentloaded")
-            time.sleep(self.settle + 2)
-            discovered = self.discover_recipes() or discovered
 
-        # resolve name-only rows against what the folder page shows
+        discovered = dict(first_page)
+        if set(known) - set(discovered) or by_name:
+            log("  scanning pagination and subfolders for configured recipes...")
+            discovered = self.discover_recipes_deep(fid)
+            self.goto(assets_url(fid), must_contain=f"fid={fid}")
+
         for e in by_name:
             rid, why = match_recipe_by_name(e["name"], discovered)
             if rid:
@@ -869,18 +1052,18 @@ class Capturer:
                 if e["group"]:
                     groups[rid] = e["group"]
             else:
-                self.warn(f"could not resolve '{e['name']}' in folder '{name}' ({why}) - "
-                          f"fill in its Recipe ID in the config sheet")
+                self.warn(f"could not resolve '{e['name']}' in folder '{name}' ({why}) - fill in its Recipe ID")
 
-        # compare page vs config: flag new / missing, but never change what we capture
-        for rid, rname in discovered.items():
+        # NEW = on the folder's own first page but not in the sheet; MISSING = not found anywhere in the tree
+        for rid, rname in first_page.items():
             if rid not in known and rid not in skip:
                 self.warn(f"NEW recipe in '{name}' not in config sheet: {rid} '{rname}' - add it to the sheet (Capture Y/N)")
-            elif rid in known and rname and not known[rid]:
+        for rid, rname in discovered.items():
+            if rid in known and rname and not known[rid]:
                 known[rid] = rname
         for rid in known:
             if discovered and rid not in discovered:
-                self.warn(f"recipe {rid} '{known[rid]}' is in the config sheet but not visible in folder '{name}'")
+                self.warn(f"recipe {rid} '{known[rid]}' is in the config sheet but not found in '{name}' or its subfolders")
         self.shoot(tab, "assets", fid, f"{name} - Assets (filter: Recipes)", assets_url(fid))
 
         for rid, rname in recipes.items():
@@ -890,7 +1073,6 @@ class Capturer:
             log(f"  Recipe {rid}: {label}")
             self.goto(versions_url(rid), must_contain=f"/recipes/{rid}")
             self.shoot(tab, "versions", rid, f"{label} (ID {rid}) - Versions (filter: Recipe change)", versions_url(rid))
-
 
 LOGIN_PATH_MARKERS = ("/users/sign_in", "/users/password", "/login", "okta.com", "accounts.google.com", "/saml")
 APP_UI_MARKERS = ("projects", "recipes", "connections", "workspace")
@@ -1072,22 +1254,65 @@ def page_text(page):
         return ""
 
 
+ENV_TEXT_JS = """
+() => {
+  const parts = [document.title || '', (document.body && document.body.innerText) || '',
+                 (document.body && document.body.textContent) || ''];
+  document.querySelectorAll('[aria-label],[title],[data-tooltip]').forEach(el => {
+    parts.push(el.getAttribute('aria-label') || '', el.getAttribute('title') || '', el.getAttribute('data-tooltip') || '');
+  });
+  // header / switcher area usually sits at the very top of the page
+  const top = Array.from(document.querySelectorAll('header, nav, [class*="header" i], [class*="switcher" i], [class*="environment" i], [class*="workspace" i]'))
+                   .map(el => el.textContent || '').join(' ');
+  return (parts.join(' ') + ' ' + top).replace(/\\s+/g, ' ').slice(0, 20000);
+}
+"""
+
+
+def env_visible(page, name):
+    try:
+        txt = page.evaluate(ENV_TEXT_JS) or ""
+    except Exception:
+        txt = ""
+    return name.lower() in txt.lower(), txt
+
+
 def in_workspace(page, name):
-    return name.lower() in page_text(page).lower()
+    return env_visible(page, name)[0]
 
 
-def ensure_workspace(page, name):
-    """Block until the Workato UI shows the expected workspace name (e.g. 'Production').
-    The script never switches workspaces itself - you do it in the browser window."""
-    while True:
-        page.goto(BASE, wait_until="domcontentloaded")
+def ensure_workspace(page, name, timeout_s=600):
+    """Wait until `name` (e.g. 'Development') is visible in any open tab. Checks rendered text,
+    textContent, aria-labels/titles and the header area; re-opens the home page every 30 s.
+    Logs a snippet of what it sees so a mismatch is easy to diagnose."""
+    if not name:
+        return
+    ctx = page.context
+    page.goto(BASE, wait_until="domcontentloaded")
+    time.sleep(3)
+    start, last_log, last_nav = time.time(), 0, time.time()
+    while time.time() - start < timeout_s:
+        for p in [p for p in ctx.pages if not p.is_closed()]:
+            ok, txt = env_visible(p, name)
+            if ok:
+                log(f"Environment check OK: '{name}' visible ({p.url}).")
+                return
+        if time.time() - last_log > 15:
+            snippet = txt[:300].replace("\n", " ") if txt else "(no page text readable)"
+            log(f"!! '{name}' not found yet. URL: {page.url}")
+            log(f"   page text starts: {snippet!r}")
+            log("   -> switch to the environment in the browser window; I'll continue once I see it. "
+                "(If the header shows a different label, re-run with --workspace \"<that label>\", or --workspace \"\" to skip.)")
+            last_log = time.time()
+            activate_browser()
+        if time.time() - last_nav > 30:
+            try:
+                page.goto(BASE, wait_until="domcontentloaded")
+            except Exception:
+                pass
+            last_nav = time.time()
         time.sleep(3)
-        if in_workspace(page, name):
-            log(f"Workspace check OK: '{name}' detected in the page.")
-            return
-        print(f"\n!! Workspace '{name}' NOT detected on the current page.")
-        print("   In the browser window, switch to CoreWeave > Production (workspace switcher, top-left),")
-        input("   then press Enter here to re-check... ")
+    sys.exit(f"Gave up waiting for environment '{name}'.")
 
 
 def capture(args, out_dir):
@@ -1168,7 +1393,7 @@ def capture(args, out_dir):
                     + (f"  [skip: {', '.join(f['skip'])}]" if f.get("skip") else ""))
 
         if not args.no_pause:
-            input("Confirm the plan above and that the browser shows CoreWeave > Production, then press Enter "
+            input(f"Confirm the plan above and that the browser shows the {args.workspace or 'expected'} workspace, then press Enter "
                   "to start capture (then leave the browser window alone - it must stay on screen)... ")
 
         if not BROWSER_PID:
@@ -1276,6 +1501,13 @@ def main():
     ap.add_argument("--env", default="workato",
                     help="section in config/environments.yaml to sign in with")
     args = ap.parse_args()
+
+    # "October 2026" -> "October 2026 - CW Agentic": drives the folder and workbook
+    # names, so a CW Agentic run never overwrites or mixes with a Production one.
+    label = workspace_label(args.workspace)
+    if label and not args.build_only and not args.month.endswith(f" - {label}"):
+        args.month = f"{args.month} - {label}"
+    log(f"=== Workato CM Review for {label or args.workspace or 'Workato'} ===")
 
     out_dir = Path(args.out) if args.out else Path(f"sox_{slug(args.month)}_{datetime.now().strftime('%Y%m%d-%H%M%S')}")
     out_dir.mkdir(parents=True, exist_ok=True)
